@@ -179,13 +179,27 @@ async def answer_stream(
         function_call={"name": "answer"},
     )
 
+    # 2) 본문 스트리밍
     async for chunk in resp:
         choice = chunk.choices[0]
-        if choice.finish_reason is None:
-            args = choice.delta.function_call.arguments if choice.delta.function_call else ""
-            if args:
-                yield f"data: {args}"
-        else:
+
+        # 텍스트 델타가 있으면
+        if hasattr(choice.delta, "content") and choice.delta.content:
+            text = choice.delta.content
+            # 모델이 생성한 조각 그대로 보내되, 한 번에 델타 전체를
+            yield "event: answer\n"
+            yield f"data: '{text}'\n\n"
+
+        # 함수 호출 arguments 델타가 있으면
+        if choice.delta.function_call and choice.delta.function_call.arguments:
+            args = choice.delta.function_call.arguments
+            yield "event: answer\n"
+            yield f"data: '{args}'\n\n"
+
+        # 끝났으면
+        if choice.finish_reason:
+            yield "event: end\n"
+            yield "data: [DONE]\n\n"
             break
 
     yield "event: end\ndata: [DONE]"
