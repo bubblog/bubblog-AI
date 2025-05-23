@@ -10,7 +10,7 @@ from app.services.embedding import embed_texts
 settings = get_settings()
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
-# 가까운 청크 즉 블로그 본문 청크를 find
+# 가까운 청크 즉 블로그 본문 청크를 finds
 async def similar_chunks(
     q_embed: list[float],
     user_id: str,
