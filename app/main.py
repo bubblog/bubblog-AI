@@ -1,11 +1,26 @@
 from fastapi import Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from jose import jwt, JWTError
 
 from app import app
 from app.config import get_settings
 from app.models import EmbedReq, EmbedResp, AskReq, TitleEmbedRequest
 from app.services import embedding, qa
+
+origins = [
+    "http://localhost",
+    "http://localhost:3000"
+]
+
+# CORS 미들웨어 등록
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,          
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 settings = get_settings()
 
