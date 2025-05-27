@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     embed_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict()
 
 @lru_cache
 def get_settings() -> Settings:
