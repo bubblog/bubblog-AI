@@ -13,7 +13,7 @@ class EmbedResp(BaseModel):
 class AskReq(BaseModel):
     question: str
     user_id: str
-    category_id: Optional[str] = None
+    category_id: Optional[int] = None
 
 class ChatLog(BaseModel):
     user_id: str | None
