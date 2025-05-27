@@ -128,7 +128,10 @@ async def answer_stream(
     # 2. existInPost 값을 클라이언트에 별도 이벤트로 전달 (필요 없다면 이 부분 삭제)
     yield f"event: exist_in_post_status\ndata: {json.dumps(existInPost)}\n\n"
     # 3. 원래의 context 이벤트는 그대로 전달, similarity_score포함.
-    chunks_payload = json.dumps(similar_data, ensure_ascii=False)
+    chunks_payload = json.dumps(
+      [{"post_id": item["post_id"], "post_title": item["post_title"]} for item in similar_data],
+      ensure_ascii=False
+    )
     yield f"event: context\ndata: {chunks_payload}\n\n"
 
     # LLM에 전달할 context_for_llm 구성
