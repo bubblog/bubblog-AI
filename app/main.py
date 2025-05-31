@@ -37,13 +37,13 @@ async def verify_jwt(request: Request) -> dict:
 
 # ───────────────────────────────── Endpoints ─────────────────────────────────
 # 제목 임베딩
-@app.post("/embeddings/title")
+@app.post("/ai/embeddings/title")
 async def embed_title(req: TitleEmbedRequest):
     await embedding.store_title_embedding(str(req.post_id), req.title)
     return {"ok": True}
 
 # 본문 임베딩
-@app.post("/embeddings/content", response_model=EmbedResp) #, dependencies=[Depends(verify_jwt)] )
+@app.post("/ai/embeddings/content", response_model=EmbedResp) #, dependencies=[Depends(verify_jwt)] )
 async def embed_route(req: EmbedReq):
     chunks = embedding.chunk_text(req.content)  # 특정 크기(최대 512)로 자름
     embData = await embedding.embed_texts(chunks)   # 임베딩
@@ -51,7 +51,7 @@ async def embed_route(req: EmbedReq):
     return EmbedResp(post_id=req.post_id, chunk_count=len(chunks))
 
 # 질문에 대한 응답을 sse로 전달
-@app.post("/ask") #, dependencies=[Depends(verify_jwt)])
+@app.post("ai/ask") #, dependencies=[Depends(verify_jwt)])
 async def ask_route(req: AskReq):
     return StreamingResponse(
         qa.answer_stream(
@@ -63,6 +63,6 @@ async def ask_route(req: AskReq):
     )
 
 # 서버 체크 용
-@app.get("/health")
+@app.get("/ai/health")
 async def health_route():
     return {"status": "ok"}
