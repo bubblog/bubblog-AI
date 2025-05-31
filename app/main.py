@@ -51,7 +51,7 @@ async def embed_route(req: EmbedReq):
     return EmbedResp(post_id=req.post_id, chunk_count=len(chunks))
 
 # 질문에 대한 응답을 sse로 전달
-@app.post("ai/ask") #, dependencies=[Depends(verify_jwt)])
+@app.post("/ai/ask") #, dependencies=[Depends(verify_jwt)])
 async def ask_route(req: AskReq):
     return StreamingResponse(
         qa.answer_stream(
