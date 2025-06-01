@@ -3,10 +3,17 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from jose import jwt, JWTError
 
-from app import app
+from fastapi import FastAPI
 from app.config import get_settings
 from app.models import EmbedReq, EmbedResp, AskReq, TitleEmbedRequest
 from app.services import embedding, qa
+
+app = FastAPI(
+    docs_url="/ai/docs",
+    redoc_url=None,
+    openapi_url="/ai/openapi.json"
+)
+
 
 origins = [
     "http://localhost",
