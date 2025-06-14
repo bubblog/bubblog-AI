@@ -17,7 +17,8 @@ app = FastAPI(
 
 origins = [
     "http://localhost",
-    "http://localhost:3000"
+    "http://localhost:3000",
+    "https://bubblog-fe.vercel.app/"
 ]
 
 # CORS 미들웨어 등록
