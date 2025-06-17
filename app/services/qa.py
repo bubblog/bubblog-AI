@@ -105,8 +105,8 @@ async def answer_stream(
     question: str,
     user_id: str,
     category_id: str | None,
+    speech_tone: int | None = -1,
     limit: int = 5,
-    speech_tone: str = "기본 말투"
 ) -> AsyncIterator[str]:
     
     # 질문 임베딩
@@ -115,17 +115,32 @@ async def answer_stream(
     # 제목 + 본문 청크 하이브리드 검색
     # similar_chunks 호출 시 기본 임계값(0.6)이 사용됨 (사용자 코드에서는 0.2으로 지정)
 
-    # 말투 옵션
-    #speech_tone_for_llm_0 = "기본 말투" # 이미 입력 되어있음
-    speech_tone_for_llm_1 = "상대가 나보다 아랫사람이거나 나보다 하등한 사람인거처럼 반말로해줘"
-    speech_tone_for_llm_2 = "전문성있게 간단하고 명료하게 설명해"
-    speech_tone_for_llm_3 = "경상도, 부산, 대구 사투리와 같은 말로 반말해"
-    speech_tone_for_llm_4 = "상대방을 존중하는 높임말, 하심시오체를 사용해"
+    # 기본 말투 옵션
+    speech_tone_for_llm_1 = "전문성있게 간단하고 명료하게 설명해"
+    speech_tone_for_llm_2 = "아래의 블로그 본문 컨텍스트를 참고하여 본문의 말투를 파악해 최대한 비슷한 말투로 답변해"
 
-    # 여기서 다른 옵션의 말투를 설정하지 않으면 0번 기본 말투로 진행됩니다
-    # 다른 말투로 설정하기 위해서 아래 코드의 샵을 지우세요
-    #speech_tone = speech_tone_for_llm_1,2,3,4 
-    
+    if speech_tone == -1:
+        speech_tone_for_llm = speech_tone_for_llm_1
+    elif speech_tone == -2:
+        speech_tone_for_llm = speech_tone_for_llm_2
+    else:
+        # speech_tone이 -1 또는 -2가 아닌 경우, 데이터 베이스에서 해당 말투를 가져와 전달
+        persona_id = int(speech_tone)
+        pool = await get_pool()
+        sql = """
+            SELECT name, description 
+            FROM persona
+            WHERE id = $1;
+        """
+        row = await pool.fetchrow(sql, persona_id)
+        if row:
+            speech_tone_for_llm = f"{row['name']}: {row['description']}"
+        else:
+            speech_tone_for_llm = speech_tone_for_llm_1
+
+    print(f"Speech Tone for LLM: {speech_tone_for_llm}")  # 디버깅용 출력
+
+    # 예외 처리: 만약 유사 청크 검색이 실패하면, 기본 임계값(0.2)으로 다시 시도    
     try:
         similar_data = await similar_chunks(
             q_embed,
@@ -135,7 +150,6 @@ async def answer_stream(
             alpha=0.7,
             beta=0.3,
             similarity_threshold=0.2,# 다른 임계값을 사용하고 싶다면 여기서 지정 (사용자 지정값 유지)
-            speech_tone = speech_tone_for_llm#0,1,2,3
         )
     except:
         similar_data = await similar_chunks(
@@ -173,104 +187,82 @@ async def answer_stream(
     yield f"event: context\ndata: {chunks_payload}\n\n"
 
     # LLM에 전달할 context_for_llm 구성
-    if not existInPost: # similar_data가 비어있는 경우
-        context_for_llm = "NO POST IN USER BLOG(relevance threshold not met)"
+    if not existInPost:            # 연관 포스트가 없을 때
+        context_chunks: list[dict] = []          # 빈 리스트
     else:
-        entries = []
-        for item in similar_data:
-            title = item["post_title"]
-            chunk = item["post_chunk"]
-            score = item.get("similarity_score", 0.0) # 점수가 있을 경우 표시 (디버깅/참고용) (사용자 선택 유지)
-            entries.append(
-                f"Blog Post Context Title: {title} (Similarity: {score:.2f})\n"
-                f"Blog Post Context Text:\n{chunk}"
-            )
-        # 각 포스트별로 구분해 병합
-        context_for_llm = "\n---\n".join(entries)
+        context_chunks = [
+            {
+                "text":  item["post_chunk"],           # 청크 본문
+                "score": item.get("similarity_score", 0.0),   # 선택: 유사도
+                "title": item["post_title"]            # 선택: 제목(디버깅용)
+            }
+            for item in similar_data
+        ]
 
+    print(context_chunks)
+    
     # 프롬프트 구성
-    prompt_message = f"""
-당신은 블로그 내용을 기반으로 블로그 방문객의 질문에 답변하는 AI 어시스턴트이자 해당 블로그의 운영자 역할을 수행합니다.
-사용자는 다음과 같은 카테고리의 글을 작성하는 블로거입니다.
-"{category_names}"
+    # --------- System 메시지 (불변 규칙) ---------
+    system_prompt = """
+    당신은 블로그 운영자 AI입니다. 사용자의 블로그에 대한 질문에 답변합니다. 
+    블로그 운영자 AI는 사용자의 질문에 대해 블로그 본문 컨텍스트를 참고하여 답변합니다.
 
-다음은 사용자 질문과 제공된 블로그 본문 컨텍스트와 답변의 말투입니다.
+    모든 한국어 응답은 무슨일이 있어도 반드시 답변 말투 및 규칙을 따릅니다. 
 
-사용자 질문: "{question}"
-답변 말투: "{speech_tone}"
+    또한 주어진 내용외의 내용을 지어내지 마십시오.
+    
+    [응답 규칙]
+    1. 만약 제목과 본문을 활용해 답변할 수 있다면 답변 말투 및 규칙을 지켜 직접 답변하고, 마지막에 추가적인 내용에 대한 질문을 유도하는 문장을 추가합니다.
 
-블로그 본문 컨텍스트 :
----
-{context_for_llm}
----
+    2. 만약 질문이 욕설·비난·무관·부적절하거나 주어진 제목, 본문과 관련이 없다면 사과와 블로그 관련된 내용만 답변 가능하다는 내용을 답변 말투 및 규칙을 지켜 답합니다.  
 
-만약 "{speech_tone}"가 "기본 말투" 라면 "답변 말투"는 {context_for_llm}의 말투를 사용하세요.
-
-이제 다음 규칙에 따라 어떤 함수를 호출할지 결정하여 사용자에게 전달할 최종 답변을 한국어로 작성해주세요.
-답변을 생성할 때는 위에 제시된 "답변 말투"를 반드시 참고하여 그와 가장 유사한 말투로 작성해야 합니다.
-
-규칙: 
-1.  사용자 질문의 성격을 분석합니다.
-    - 만약 질문이 욕설/비난/블로그 내용과 무관한 일반적인 대화 시도/의미를 알 수 없는 내용/답변할 수 없는 부적절한 요청이라면 `address_problematic_query` 함수를 호출하세요. 'text' 파라미터에는 "죄송하지만, 저는 블로그 내용과 관련된 질문에 답변을 드리기 위해 여기에 있습니다. 다른 질문이 있으신가요?" 또는 "말씀하신 내용을 이해하기 어렵습니다. 블로그 내용과 관련하여 좀 더 자세히 질문해주시겠어요?" 와 같이 정중하게 응답합니다. 이 경우 "블로그 본문 컨텍스트"는 참고하지 않습니다.
-
-2.  사용자 질문이 블로그 내용에 대한 문의일 가능성이 있다고 판단되면, 제공된 "블로그 본문 컨텍스트"를 확인합니다.
-    다음 a,b,c의 경우들중 알맞는 경우를 선택하여 답변을 할때 반드시 "답변 말투"와 가장 유사한 말투로 답변을 바꾸어 답변해야 합니다.
-    a.  만약 "블로그 본문 컨텍스트"가 "NO POST IN USER BLOG (relevance threshold not met)" 또는 "NO POST IN USER BLOG" 와 같이 관련 내용을 찾지 못했다는 표시라면::
-        - `report_content_not_found` 함수를 호출하세요. 'text' 파라미터에는 "죄송합니다. 문의하신 '{question}'에 대한 내용은 아직 제 블로그에 작성된 글이 없거나, 현재로서는 충분히 관련된 내용을 찾지 못했습니다." 와 같이 답변합니다.
-    b.  만약 "블로그 본문 컨텍스트"가 제공되었다면, 이 내용을 바탕으로 사용자 질문에 직접적인 답변을 할 수 있는지 판단합니다.
-        - 제공된 컨텍스트로 답변을 할 수 있다면(단, 절대 지어내지 말고 블로그의 글을 기반으로 대답하세요!), `answer_from_context` 함수를 호출하세요. 'text' 파라미터에는 컨텍스트를 기반으로 생성한 답변을 포함합니다. 간결하고 명확하게 작성합니다. 모든 작성이 끝난 뒤, 마지막으로 "이에 대해서 더 궁금하신것이 있을까요?" 와 같이 더 자세한 질문을 유도하는 답변을 작성합니다.
-        - 또는 제공된 컨텍스트가 정보로 최대한 대답을 하고 만약 정보가 충분하지 않다면, `report_content_not_found` 함수를 호출하세요. 'text' 파라미터에는 "관련된 글에서 정보를 찾아보았지만, 해당 질문에 대한 구체적인 답변은 찾기 어렵습니다. 질문을 조금 자세하게 해주시거나 다른 궁금한 점을 알려주시겠어요?" 와 같이 답변합니다.
-    c. 블로그 글이 아닌 블로그 전체에 대한 질문일 경우 사용자 정보를 기반으로 대답하세요
-    
-최종적인 말투는 주어진 "답변 말투"를 따라야 합니다. 모든 답변은 한국어로 제공되어야 합니다.
-
+    3. 질문이 블로그 카테고리나 사용자 블로그에는 부합하지만 제공된 본문 컨텍스트의 내용이 부족하거나 적절하지 않다고 판단되면  
+    report_content_insufficient 함수를 호출합니다.
+ 
     """
 
+    # --------- User 메시지  ---------
+    user_message = f"""
+        블로그 카테고리: {', '.join(category_names)}
+        카테고리들을 참고해 해당 블로그가 어떤 블로그인지 파악하고 대답하세요.
+
+        답변 말투 및 규칙: "{speech_tone_for_llm}"
+        반드시 말투 및 규칙에 따라 대답하세요!
+
+        아래의 질문과 블로그 본문 컨텍스트를 참고하여 답변하세요.
+        사용자의 질문: {question}
+
+        가장 근접한 블로그 본문 컨텍스트:
+        {json.dumps(context_chunks, ensure_ascii=False, indent=2)}
+    """
+   
+    # --------- messages 배열 ---------
     messages = [
-        {"role": "user", "content": prompt_message}
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_message.strip()}
     ]
-    
+
+    # --------- Function Calling ---------
     tools = [
         {
             "type": "function",
             "function": {
-                "name": "answer_from_context",
-                "description": "제공된 블로그 본문에서 답변을 찾아 사용자에게 전달할 때 사용합니다.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"text": {"type": "string", "description": "블로그 본문을 기반으로 생성된 답변 내용"}},
-                    "required": ["text"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "report_content_not_found",
-                "description": "질문이 블로그 주제와 관련은 있으나, 본문에서 답변을 찾지 못했거나 관련 글이 없을 때 사용합니다.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"text": {"type": "string", "description": "관련 내용이 없음을 알리는 사용자 안내 메시지"}},
-                    "required": ["text"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "address_problematic_query",
-                "description": "질문이 블로그 주제와 무관하거나, 부적절하거나, 의미를 알 수 없을 때 사용합니다.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"text": {"type": "string", "description": "부적절한 질문에 대한 정중한 응답 또는 안내 메시지"}},
-                    "required": ["text"],
-                },
-            },
+                "name":        "report_content_insufficient",
+                "description": "카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출",
+                "parameters":  {
+                    "type":       "object",
+                    "properties": {
+                        "text":           { "type": "string"  },
+                        "need_follow_up": { "type": "boolean" }
+                    },
+                    "required": ["text"]
+                }
+            }
         }
     ]
+
     # finish_reason에 따라 한 번만 end 이벤트를 보내기 위한 플래그
-    end_event_sent = False # 사용자 코드 위치 유지
-    # 스트리밍으로 응답
+    end_event_sent = False  # finish_reason에 따라 end 이벤트 한 번만 전송하기 위한 플래그
     resp = await client.chat.completions.create(
         model=settings.chat_model,
         stream=True,
@@ -278,9 +270,9 @@ async def answer_stream(
         tools=tools,
         tool_choice="auto",
     )
-    current_tool_call_id = None # 사용자 코드 위치 및 변수 선언 유지
-    current_function_name = None # 사용자 코드 위치 및 변수 선언 유지
-    current_arguments_str = "" # 사용자 코드 위치 및 변수 선언 유지
+    # current_tool_call_id = None # 사용자 코드 위치 및 변수 선언 유지
+    # current_function_name = None # 사용자 코드 위치 및 변수 선언 유지
+    # current_arguments_str = "" # 사용자 코드 위치 및 변수 선언 유지
     
 
     # 2) 본문 스트리밍
@@ -326,14 +318,10 @@ async def answer_stream(
         # 만약 현재 청크의 delta에 일반 텍스트 내용(content)이 있고, 동시에 tool_calls는 없는 경우입니다.
         # (현재 사용 중인 프롬프트는 LLM이 tool_calls를 사용하도록 강하게 유도하고 있으므로,
         # 이 경로로 응답이 오는 경우는 거의 없거나, LLM이 프롬프트 지시를 따르지 않은 예외적인 상황일 수 있습니다.)
-        if delta.content and not delta.tool_calls: 
-            # LLM이 (드물게) 함수 호출 대신 일반 텍스트로 응답하는 경우
-            # text = delta.content # 일반 텍스트 내용으로 가져옴
-            # # 일반 텍스트도 JSON 형식으로 변경 후 전송
-            # temp_args = json.dumps({"text": text}, ensure_ascii=False) 
-            # yield "event: answer\n" # 혹은 다른 이벤트 타입 (예: "text_response")
-            # yield f"data: '{temp_args}'\n\n"
-            pass # 사용자 코드 주석 및 pass 유지
+        if delta.content:
+            # chunk 단위로 partial text를 보내거나, JSON으로 래핑해서 보낼 수 있습니다
+            yield "event: answer\n"
+            yield f"data: '{delta.content}'\n\n"
 
         # 만약 현재 choice에 스트림의 종료를 나타내는 이유(finish_reason) 정보가 있고,
         # 아직 'end' 이벤트가 클라이언트에게 전송되지 않았다면,

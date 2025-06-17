@@ -18,7 +18,7 @@ app = FastAPI(
 origins = [
     "http://localhost",
     "http://localhost:3000",
-    "https://bubblog-fe.vercel.app/"
+    "https://bubblog-fe.vercel.app"
 ]
 
 # CORS 미들웨어 등록
@@ -40,7 +40,7 @@ async def verify_jwt(request: Request) -> dict:
     token = auth.split(" ", 1)[1]
 
     key_bytes = settings.secret_key.encode("utf-8")
-    
+
     try:
         payload = pyjwt.decode(
             token,
@@ -73,7 +73,8 @@ async def ask_route(req: AskReq):
         qa.answer_stream(
             req.question,
             req.user_id,
-            req.category_id 
+            req.category_id, 
+            req.speech_tone
         ),
         media_type="text/event-stream"
     )

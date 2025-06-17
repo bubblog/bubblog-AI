@@ -14,6 +14,7 @@ class AskReq(BaseModel):
     question: str
     user_id: str
     category_id: Optional[int] = None
+    speech_tone: Optional[int] = None 
 
 class ChatLog(BaseModel):
     user_id: str | None
