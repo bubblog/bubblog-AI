@@ -30,28 +30,34 @@ async def similar_chunks(
     # 카테고리 아이디가 있는 경우 
     if category_id:
         sql = """
-        WITH filtered_posts AS (
-          SELECT id    AS post_id,
-                 title
-            FROM blog_post
-           WHERE user_id     = $1
-             AND category_id = $2
+        WITH category_ids AS (
+            SELECT DISTINCT cc.descendant_id
+            FROM category_closure cc
+            WHERE cc.ancestor_id = $2
+        ),
+        filtered_posts AS (
+            SELECT
+                bp.id    AS post_id,
+                bp.title AS post_title
+            FROM blog_post bp
+            WHERE bp.user_id     = $1
+                AND bp.category_id IN (SELECT descendant_id FROM category_ids)
         )
         SELECT
-          fp.post_id,
-          fp.title      AS post_title,
-          pc.content    AS post_chunk, -- 수정: 쉼표(,) 추가
-          ( 
-            $5 * (1.0 / (1.0 + (pc.embedding <-> $3::vector)))
-            + $6 * (1.0 / (1.0 + (pte.embedding <-> $3::vector)))
-          ) AS similarity_score -- 컬럼으로 선택
+            fp.post_id,
+            fp.post_title,
+            pc.content      AS post_chunk,
+            (
+                $5 * (1.0 / (1.0 + (pc.embedding <-> $3::vector)))
+                + $6 * (1.0 / (1.0 + (pte.embedding <-> $3::vector)))
+            )               AS similarity_score
         FROM filtered_posts fp
         JOIN post_chunks pc
-          ON pc.post_id = fp.post_id
+            ON pc.post_id = fp.post_id
         JOIN post_title_embeddings pte
-          ON pte.post_id = fp.post_id
+            ON pte.post_id = fp.post_id
         ORDER BY
-          similarity_score DESC
+            similarity_score DESC
         LIMIT $4;
         """
         # $1: user_id, $2: category_id, $3: vec_str, $4: limit, $5: alpha, $6: beta
@@ -216,8 +222,12 @@ async def answer_stream(
 
     2. 만약 질문이 욕설·비난·무관·부적절하거나 주어진 제목, 본문과 관련이 없다면 사과와 블로그 관련된 내용만 답변 가능하다는 내용을 답변 말투 및 규칙을 지켜 답합니다.  
 
-    3. 질문이 블로그 카테고리나 사용자 블로그에는 부합하지만 제공된 본문 컨텍스트의 내용이 부족하거나 적절하지 않다고 판단되면  
-    report_content_insufficient 함수를 호출합니다.
+    3. 질문이 블로그 카테고리나 사용자 블로그에는 부합하지만 제공된 본문 컨텍스트의 내용이 매우 부족하거나 적절하지 않다고 판단되면  
+    report_content_insufficient 함수를 호출하고, 호출 시 전달하는 'text' 파라미터와  
+    'need_follow_up' 플래그를 함께 설정한 뒤  
+    답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 한 뒤 
+    본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 
+    해당 내용에 대한 질문을 직접적으로 유도합니다. 
  
     """
 
@@ -252,7 +262,6 @@ async def answer_stream(
                 "parameters":  {
                     "type":       "object",
                     "properties": {
-                        "text":           { "type": "string"  },
                         "need_follow_up": { "type": "boolean" }
                     },
                     "required": ["text"]
