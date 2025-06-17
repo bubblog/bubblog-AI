@@ -23,6 +23,7 @@ pycparser==2.22
 pydantic==2.11.3
 pydantic-settings==2.9.1
 pydantic_core==2.33.1
+PyJWT==2.10.1
 python-dotenv==1.1.0
 python-jose==3.4.0
 PyYAML==6.0.2
@@ -41,4 +42,3 @@ uvicorn==0.34.2
 uvloop==0.21.0
 watchfiles==1.0.5
 websockets==15.0.1
-gunicorn==21.2.0
