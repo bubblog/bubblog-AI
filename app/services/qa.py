@@ -144,8 +144,6 @@ async def answer_stream(
         else:
             speech_tone_for_llm = speech_tone_for_llm_1
 
-    print(f"Speech Tone for LLM: {speech_tone_for_llm}")  # 디버깅용 출력
-
     # 예외 처리: 만약 유사 청크 검색이 실패하면, 기본 임계값(0.2)으로 다시 시도    
     try:
         similar_data = await similar_chunks(
@@ -205,8 +203,6 @@ async def answer_stream(
             for item in similar_data
         ]
 
-    print(context_chunks)
-    
     # 프롬프트 구성
     # --------- System 메시지 (불변 규칙) ---------
     system_prompt = """
