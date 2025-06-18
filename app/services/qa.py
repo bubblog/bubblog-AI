@@ -122,7 +122,7 @@ async def answer_stream(
     # similar_chunks 호출 시 기본 임계값(0.6)이 사용됨 (사용자 코드에서는 0.2으로 지정)
 
     # 기본 말투 옵션
-    speech_tone_for_llm_1 = "전문성있게 간단하고 명료하게 설명해"
+    speech_tone_for_llm_1 = "간결하고 명확한 말투로 답변해"
     speech_tone_for_llm_2 = "아래의 블로그 본문 컨텍스트를 참고하여 본문의 말투를 파악해 최대한 비슷한 말투로 답변해"
 
     if speech_tone == -1:

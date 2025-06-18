@@ -14,7 +14,7 @@ app = FastAPI(
     openapi_url="/ai/openapi.json"
 )
 
-
+# cors를 위한 프론트 도메인 
 origins = [
     "http://localhost",
     "http://localhost:3000",
