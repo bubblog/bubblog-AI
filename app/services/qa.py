@@ -7,6 +7,10 @@ from app.config import get_settings
 from app.db import get_pool
 from app.services.embedding import embed_texts
 
+from keybert import KeyBERT  # Import KeyBERT
+from sentence_transformers import SentenceTransformer # Import SentenceTransformer
+
+
 settings = get_settings()
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -165,6 +169,20 @@ async def answer_stream(
             beta=0.3,
             similarity_threshold=0.2 # 다른 임계값을 사용하고 싶다면 여기서 지정 (사용자 지정값 유지)
         )
+    # --- 키워드 추출 시작 --- #
+    extracted_keywords = []
+    if similar_data:
+        # 청크 결합
+        text_for_keywords = " ".join(item['post_chunk'] for item in similar_data)
+        # 제일 관련성 높은 3개의 키워드 추출
+        keywords = kw_model.extract_keywords(text_for_keywords,
+                                             keyphrase_ngram_range=(1, 1),
+                                             stop_words=None,
+                                             top_n=3)
+        
+        # 관련성 높은 3개 키워드 리스트로 저장
+        extracted_keywords = [keyword for keyword, score in keywords]
+    # --- 키워드 추출 끝 --- #
     
     pool = await get_pool()
 
