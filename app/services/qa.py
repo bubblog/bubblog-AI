@@ -7,12 +7,32 @@ from app.config import get_settings
 from app.db import get_pool
 from app.services.embedding import embed_texts
 
-from keybert import KeyBERT  # Import KeyBERT
-from sentence_transformers import SentenceTransformer # Import SentenceTransformer
-
+from keybert import KeyBERT  # 키워드 추출 라이브러리
+from sentence_transformers import SentenceTransformer
+from konlpy.tag import Mecab # 키워드 명사형 변환 라이브러리
 
 settings = get_settings()
 client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+# 키워드 추출 KeyBERT 모델
+kw_model = KeyBERT(SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2'))
+
+# 명사형 변환 모델 Mecab initializing. 효율 증가
+try:
+    mecab = Mecab()
+    print("Mecab analyzer loaded successfully.")
+except Exception as e:
+    print(f"Could not load Mecab, using fallback. Error: {e}")
+    # Define a simple fallback function if Mecab is not available
+    def simple_fallback_noun_extractor(keyword):
+        particles = ['은', '는', '이', '가', '을', '를', '의']
+        for p in particles:
+            if keyword.endswith(p):
+                return keyword[:-len(p)]
+        return keyword
+    mecab = None
+
+
 
 # 가까운 청크 즉 블로그 본문 청크를 finds
 async def similar_chunks(
@@ -174,14 +194,25 @@ async def answer_stream(
     if similar_data:
         # 청크 결합
         text_for_keywords = " ".join(item['post_chunk'] for item in similar_data)
-        # 제일 관련성 높은 3개의 키워드 추출
-        keywords = kw_model.extract_keywords(text_for_keywords,
-                                             keyphrase_ngram_range=(1, 1),
-                                             stop_words=None,
-                                             top_n=3)
+        # 제일 관련성 높은 3개의 키워드 추출 (명사형 아님)
+        keywords_with_particles = kw_model.extract_keywords(text_for_keywords,
+                                                            keyphrase_ngram_range=(1, 1),
+                                                            stop_words=None,
+                                                            top_n=3)
         
         # 관련성 높은 3개 키워드 리스트로 저장
-        extracted_keywords = [keyword for keyword, score in keywords]
+        clean_keywords = []
+        for keyword, score in keywords_with_particles:
+            if mecab:
+                # 명사형으로 변환
+                pos_list = mecab.pos(keyword)
+                noun_form = "".join([word for word, pos in pos_list if pos.startswith('N')])
+                if noun_form:
+                    clean_keywords.append(noun_form)
+            else:
+                # Mecab initialization 오류 생길시 기본 Mecab 모델 사용
+                clean_keywords.append(simple_fallback_noun_extractor(keyword))
+        extracted_keywords = clean_keywords
     # --- 키워드 추출 끝 --- #
     
     pool = await get_pool()
@@ -194,7 +225,8 @@ async def answer_stream(
     params = (user_id, )
 
     rows = await pool.fetch(sql, *params)
-
+    # 아래 쿼리문 이용해서 rows 얻어내는게 더 나을라나?
+    # rows = await pool.fetch("SELECT c.name FROM category c WHERE c.user_id = $1;", user_id)
     category_names = ", ".join([row["name"] for row in rows])
 
     # 1. existInPost Python 변수 선언 및 값 할당
