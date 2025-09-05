@@ -3,9 +3,9 @@ from typing import AsyncIterator
 import json
 from openai import AsyncOpenAI
 
-from app.config import get_settings
-from app.db import get_pool
-from app.services.embedding import embed_texts
+from _Legacy_app.config import get_settings
+from _Legacy_app.db import get_pool
+from _Legacy_app.services.embedding import embed_texts
 
 settings = get_settings()
 client = AsyncOpenAI(api_key=settings.openai_api_key)

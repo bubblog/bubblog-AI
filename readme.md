@@ -87,25 +87,3 @@ CREATE INDEX idx_post_title_embeddings_embedding
 ## 4. AI 서버 작동
 
 ### `.env` 파일 작성 (루트 디렉토리 `BUBBLOG_AI`에 위치)
-
-### 가상환경 설정
-
-```bash
-# macOS/Linux
-source .venv/bin/activate
-
-# Windows
-venv\Scripts\activate
-```
-
-### 의존성 설치
-
-```bash
-pip install -r requirements.txt
-```
-
-### 서버 실행
-
-```bash
-uvicorn app.main:app --reload
-```

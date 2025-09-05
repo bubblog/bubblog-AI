@@ -5,8 +5,8 @@ import re
 import tiktoken
 from typing import List
 
-from app.config import get_settings
-from app.db import get_pool
+from _Legacy_app.config import get_settings
+from _Legacy_app.db import get_pool
 
 settings = get_settings()
 openai.api_key = settings.openai_api_key

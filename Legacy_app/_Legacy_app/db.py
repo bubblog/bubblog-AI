@@ -1,6 +1,6 @@
 import asyncpg
 from typing import Optional
-from app.config import get_settings
+from _Legacy_app.config import get_settings
 
 _pool: Optional[asyncpg.Pool] = None
 

@@ -1,10 +1,27 @@
-FROM python:3.11-slim
+# Stage 1: Build the application
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package*.json ./
 
-COPY ./app ./app
+RUN npm install
 
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "app.main:app", "--bind", "0.0.0.0:8000"]
+COPY . .
+
+RUN npm run build
+
+# Stage 2: Create the production image
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install --omit=dev
+
+COPY --from=builder /app/dist ./dist
+
+EXPOSE 3000
+
+CMD ["node", "dist/server.js"]

@@ -4,9 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import jwt as pyjwt
 
 from fastapi import FastAPI
-from app.config import get_settings
-from app.models import EmbedReq, EmbedResp, AskReq, TitleEmbedRequest
-from app.services import embedding, qa
+from _Legacy_app.config import get_settings
+from _Legacy_app.models import EmbedReq, EmbedResp, AskReq, TitleEmbedRequest
+from _Legacy_app.services import embedding, qa
 
 app = FastAPI(
     docs_url="/ai/docs",
