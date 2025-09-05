@@ -43,7 +43,7 @@ jobs:
 
             docker pull $IMAGE_NAME:latest
 
-            docker run -d --name bubblog-ai -p 8000:8000 \
+            docker run -d --name bubblog-ai -p 8000:3000 \
               -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
