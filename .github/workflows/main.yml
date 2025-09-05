@@ -1,4 +1,4 @@
-name: CI/CD for FastAPI with Docker
+name: CI/CD Pipeline - Build and Deploy bubblog-ai
 
 on:
   push:
