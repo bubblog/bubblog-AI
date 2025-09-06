@@ -1,0 +1,47 @@
+name: "🧪 테스트 작성 요청"
+description: "테스트 코드가 필요한 기능이나 로직을 공유해주세요."
+title: "[🧪 Test] "
+labels: "🧪 Test"
+body:
+  - type: input
+    attributes:
+      label: 🔍 테스트 대상
+      placeholder: ex) 회원가입 서비스, 게시글 수정 API
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: ✅ 테스트해야 할 항목
+      description: 어떤 기능 또는 시나리오를 테스트해야 하는지 적어주세요.
+      placeholder: |
+        - [ ] 회원가입 성공 케이스
+        - [ ] 전화번호 중복 에러
+        - [ ] 비밀번호 형식 오류
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: ⚠️ 주의사항
+      description: 테스트 시 고려해야 할 제약사항이 있다면 작성해주세요.
+      placeholder: |
+        - [ ] DB 초기화 여부
+        - [ ] 인증 토큰 필요 여부
+
+  - type: dropdown
+    attributes:
+      label: 🧭 관련 도메인
+      options:
+        - 사용자(User)
+        - 인증(Auth)
+        - 게시글(Post)
+        - 관리자(Admin)
+      description: 이 테스트가 필요한 범위를 선택해주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: 🙋🏻 덧붙일 말
+      description: 기타 요청사항이나 맥락이 있다면 자유롭게 작성해주세요.
