@@ -1,56 +1,23 @@
-# AI 서버 기능 개선안: 글(post_id) 단위 대화 지원
+## 리팩토링 계획
 
-## 0. 목적
-- 기존 `/ai/ask`가 `user_id`, `category_id` 기준으로만 검색/대화하던 것을 확장하여 **특정 글(post_id)에 한정된 대화**를 지원한다.
-- `post_id`가 오면 **벡터 검색을 건너뛰고 해당 글 전체를 컨텍스트로 사용**하여 답변을 스트리밍한다.
+### Phase 1: Repository 계층 도입 (데이터 로직 분리)
 
-## 1. 변경 요약
-- Request Body에 `post_id?: number` 추가.
-- `post_id`가 있으면: 글 단위 대화 모드로 전환.
-  - 글 로딩 → 전처리(HTML/MD 제거, 길이 제한) → 프롬프트 구성 → LLM 스트리밍(SSE)
-- `post_id`가 없으면: 기존 RAG(사용자/카테고리) 경로 유지.
-- 유효성/권한 검증: `post_id`가 소유자/공개범위 규칙을 충족하는지 확인.
+1.  **[Repo] `src/repositories` 디렉토리 생성**: 데이터베이스 쿼리 로직을 모아둘 디렉토리를 생성합니다.
+2.  **[Repo] `post.repository.ts` 생성 및 이전**:
+    *   `blog_post`, `post_chunks`, `post_title_embeddings` 테이블 관련 쿼리를 이 파일로 옮깁니다.
+    *   `qa.service.ts`의 `findPostById`, `findSimilarChunks` 로직을 이전합니다.
+    *   `embedding.service.ts`의 `storeTitleEmbedding`, `storeContentEmbeddings` 로직을 이전합니다.
+3.  **[Repo] `persona.repository.ts` 생성 및 이전**:
+    *   `persona` 테이블 관련 쿼리를 이 파일로 옮깁니다.
+    *   `qa.service.ts`의 `getSpeechTonePrompt` 내부 DB 조회 로직을 `findPersonaById`와 같은 함수로 분리하여 이전합니다.
+4.  **[Service] 서비스 계층 수정**:
+    *   `qa.service.ts`와 `embedding.service.ts`가 DB에 직접 접근하는 대신, 새로 만든 Repository의 함수를 호출하도록 코드를 수정합니다.
 
-## 3. 비즈니스 규칙/유효성
-- `question`(필수), `user_id`(필수), `category_id`/`post_id`(선택).
-- `post_id` 제공 시:
-  - 글 존재해야 함.
-  - 비공개/권한 체크 필요.
-  - `category_id`가 함께 오면 무시하고 post_id를 기준으로 필터링
-- 길이 제한: 글 원문이 너무 길면 요약/슬라이딩 윈도우로 축약(아래 6절).
-- 주의: 현재 `user_id`는 “질문자”로 문서화되어 있음. 콘텐츠 소유자 식별이 필요하다면 `owner_id`/`blog_user_id` 등으로의 확장은 별도 변경안으로 검토.
+### Phase 2: 프롬프트 관리 분리
 
-## 4. 처리 흐름 (시퀀스)
-1) 인증/인가 → 2) 요청 스키마 검증 → 3-a) `post_id` 있으면 글 로드/검증 → 전처리 → 답변 스트리밍
-3-b) 없으면 기존 RAG 검색(사용자/카테고리 제한) → 답변 스트리밍 → 4) 로깅/메트릭 → 5) 종료
-
-## 5. 엔드포인트 동작 상세
-### 5.1 글 단위 모드(post_id)
-- 저장소에서 `{ id: post_id }`로 글 메타/본문 로드(제목, 태그, 작성일 포함).
-- 본문 전처리: HTML 제거, 코드블록/표는 유지 또는 간단 요약, 최대 토큰/문자 제한.
-- Prompt 구성: 글 메타 + 본문을 `context`로 주입하고 사용자 질문/말투를 적용.
-- 모델 호출은 SSE 스트리밍으로 답변 전송.
-
-### 5.2 기존 모드(user/category)
-- 기존 `answerStream` 유지. (벡터 검색 → 상위 K개 콘텍스트 → 스트리밍)
-
-## 11. 수용 기준(DoD)
-- `post_id` 제공 시 해당 글 내용만으로 답변하며, 글 외 자료는 사용하지 않는다.
-- SSE 스트리밍이 기존과 동일한 프로토콜로 동작(이벤트명/종료시그널 포함).
-- 404/403/422 등 에러 케이스에 대해 일관된 JSON 에러를 최초 이벤트로 송신 후 스트림 종료.
-
-### 작업 계획 (Simplified)
-
-1.  **[API] 요청 타입 수정**: `src/types/ai.types.ts`의 `askSchema`에 `post_id` 필드를 추가합니다. (완료)
-2.  **[Service] `qa.service.ts` 수정**: `answerStream` 함수를 다음과 같이 수정합니다.
-    *   **`post_id` 파라미터 추가**: 함수의 인자로 `postId?: number`를 추가합니다.
-    *   **로직 분기**: `postId`가 존재하는 경우와 아닌 경우로 로직을 분기합니다.
-    *   **`postId` 존재 시**:
-        *   데이터베이스에서 `postId`에 해당하는 게시물 정보를 조회하는 로직을 추가합니다.
-        *   게시물 접근 권한을 확인합니다.
-        *   게시물 본문(`content`)의 HTML 태그를 제거하고 길이를 제한하는 전처리 로직을 추가합니다.
-        *   조회된 게시물 정보를 사용하여 LLM에 전달할 프롬프트를 구성합니다.
-        *   구성된 프롬프트를 사용하여 `openai.chat.completions.create`를 호출하고 결과를 스트리밍합니다.
-    *   **`postId` 미존재 시**: 기존의 `findSimilarChunks`를 사용하는 RAG 로직을 그대로 수행합니다.
-3.  **[Controller] `ai.controller.ts` 수정**: `/ai/ask` 컨트롤러에서 `answerStream` 함수를 호출할 때 `req.body.post_id`를 전달하도록 수정합니다.
-4.  **[Test] 통합 테스트**: `post_id`를 포함한 요청에 대해 기능이 올바르게 동작하는지 테스트 케이스를 추가하여 검증합니다.
+5.  **[Prompt] `src/prompts` 디렉토리 생성**: 프롬프트 템플릿을 관리할 디렉토리를 생성합니다.
+6.  **[Prompt] `qa.prompts.ts` 파일 생성**:
+    *   `qa.service.ts`에 하드코딩된 시스템 프롬프트와 사용자 메시지 생성 로직을 이 파일로 옮깁니다.
+    *   `createRagPrompt`, `createPostContextPrompt`와 같이 동적으로 프롬프트를 생성하는 함수를 만듭니다.
+7.  **[Service] `qa.service.ts` 수정**:
+    *   `qa.prompts.ts`에서 프롬프트 생성 함수를 가져와(import) 사용하도록 수정합니다.

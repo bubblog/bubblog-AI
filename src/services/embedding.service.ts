@@ -1,8 +1,7 @@
 import { get_encoding } from '@dqbd/tiktoken';
-import pgvector from 'pgvector/pg';
-import { getDb } from '../utils/db';
 import config from '../config';
 import OpenAI from 'openai';
+import * as postRepository from '../repositories/post.repository';
 
 const openai = new OpenAI({
   apiKey: config.OPENAI_API_KEY,
@@ -56,20 +55,13 @@ export const createEmbeddings = async (texts: string[]): Promise<number[][]> => 
 };
 
 /**
- * Stores the title embedding for a post.
+ * Creates and stores the title embedding for a post.
  * @param postId The ID of the post.
  * @param title The title of the post.
  */
 export const storeTitleEmbedding = async (postId: number, title: string) => {
   const [embedding] = await createEmbeddings([title]);
-  const pool = getDb();
-
-  await pool.query(
-    `INSERT INTO post_title_embeddings(post_id, embedding)
-     VALUES ($1, $2)
-     ON CONFLICT (post_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
-    [postId, pgvector.toSql(embedding)]
-  );
+  await postRepository.storeTitleEmbedding(postId, embedding);
 };
 
 /**
@@ -83,54 +75,5 @@ export const storeContentEmbeddings = async (
   chunks: string[],
   embeddings: number[][]
 ) => {
-  const pool = getDb();
-  await pool.query('BEGIN');
-  try {
-    await pool.query('DELETE FROM post_chunks WHERE post_id = $1', [postId]);
-
-    const query = `
-      INSERT INTO post_chunks(post_id, chunk_index, content, embedding)
-      SELECT x.post_id, x.chunk_index, x.content, x.embedding
-      FROM UNNEST($1::bigint[], $2::int[], $3::text[], $4::vector[])
-      AS x(post_id, chunk_index, content, embedding)
-    `;
-
-    const postIds = Array(chunks.length).fill(postId);
-    const chunkIndexes = Array.from({ length: chunks.length }, (_, i) => i);
-    const pgVectors = embeddings.map(pgvector.toSql);
-
-    await pool.query(query, [postIds, chunkIndexes, chunks, pgVectors]);
-    await pool.query('COMMIT');
-  } catch (error) {
-    await pool.query('ROLLBACK');
-    throw error;
-  }
-};
-
-export interface Post {
-  id: number;
-  title: string;
-  content: string;
-  tags: string[];
-  created_at: string;
-  user_id: string;
-}
-
-/**
- * Finds a post by its ID.
- * @param postId The ID of the post to find.
- * @returns A promise that resolves to the post object or null if not found.
- */
-export const findPostById = async (postId: number): Promise<Post | null> => {
-  const pool = getDb();
-  const { rows } = await pool.query(
-    'SELECT id, title, content, tags, created_at, user_id FROM blog_post WHERE id = $1',
-    [postId]
-  );
-
-  if (rows.length === 0) {
-    return null;
-  }
-
-  return rows[0];
+  await postRepository.storeContentEmbeddings(postId, chunks, embeddings);
 };
