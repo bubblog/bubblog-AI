@@ -106,3 +106,31 @@ export const storeContentEmbeddings = async (
     throw error;
   }
 };
+
+export interface Post {
+  id: number;
+  title: string;
+  content: string;
+  tags: string[];
+  created_at: string;
+  user_id: string;
+}
+
+/**
+ * Finds a post by its ID.
+ * @param postId The ID of the post to find.
+ * @returns A promise that resolves to the post object or null if not found.
+ */
+export const findPostById = async (postId: number): Promise<Post | null> => {
+  const pool = getDb();
+  const { rows } = await pool.query(
+    'SELECT id, title, content, tags, created_at, user_id FROM blog_post WHERE id = $1',
+    [postId]
+  );
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return rows[0];
+};

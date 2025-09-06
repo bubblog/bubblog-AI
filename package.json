@@ -1,36 +1,23 @@
 {
   "name": "bubblog-ai",
   "version": "1.0.0",
-  "description": "AI Backend for Bubblog",
-  "main": "dist/server.js",
+  "description": "버블로그 ai 서버 입니다.",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon --watch 'src/**/*.ts' --exec ts-node src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js"
+    "dev": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/server.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.3.1",
-    "@types/pg": "^8.15.5",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@dqbd/tiktoken": "^1.0.22",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.2",
-    "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.2",
-    "openai": "^5.19.1",
-    "pg": "^8.16.3",
-    "pgvector": "^0.2.1",
-    "zod": "^3.25.76"
+    "express": "^5.1.0"
   }
 }

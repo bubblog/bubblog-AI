@@ -26,6 +26,7 @@ export const askSchema = z.object({
     question: z.string(),
     user_id: z.string(),
     category_id: z.number().optional(),
+    post_id: z.number().optional(),
     speech_tone: z.number().optional(),
   }),
 });
