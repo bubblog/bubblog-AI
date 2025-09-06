@@ -14,6 +14,7 @@ jobs:
     env:
       AI_REVIEW_LABEL: ai-review   # 변경 가능
       PR_SUGGEST_LABEL: ai-pr-suggest   # PR 추천 봇 트리거 라벨
+      OPENAI_MODEL: gpt-5-nano      # 공통 모델 설정
 
     steps:
       - name: Checkout
@@ -67,21 +68,28 @@ jobs:
           가능한 한 구체적 라인/파일 언급을 포함하세요.
           EOF
           )
-          BODY=$(jq -n --arg sys "$PROMPT" --arg diff "$DIFF_CONTENT" --arg title "$TITLE" '{
-            model: "gpt-4o-mini",
+          BODY=$(jq -n --arg sys "$PROMPT" --arg diff "$DIFF_CONTENT" --arg title "$TITLE" --arg model "$OPENAI_MODEL" '{
+            model: $model,
             messages: [
               {role:"system", content:$sys},
-              {role:"user", content: ("PR 제목: " + $title + "\n\nDiff:\n" + $diff)}
+              {role:"user", content:("PR 제목: " + $title + "\n\nDiff:\n" + $diff)}
             ],
             temperature: 0.2,
             max_tokens: 1000
           }')
-          RESP=$(curl -sS https://api.openai.com/v1/chat/completions \
+
+          HTTP=$(curl -sS -o resp.json -w "%{http_code}" https://api.openai.com/v1/chat/completions \
             -H "Authorization: Bearer ${OPENAI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$BODY")
-          CONTENT=$(echo "$RESP" | jq -r '.choices[0].message.content // "리뷰 생성 실패"')
-          echo "$CONTENT" > review.md
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::OpenAI API error (HTTP $HTTP)" >&2
+            jq -r '.error.message // . | tostring' resp.json || cat resp.json
+            echo "자동 생성 리뷰 실패: API 오류(HTTP $HTTP)." > review.md
+          else
+            jq -r '.choices[0].message.content // "리뷰 생성 실패"' resp.json > review.md
+          fi
           echo "content_path=review.md" >> $GITHUB_OUTPUT
 
       - name: Post review as PR comment
@@ -132,8 +140,9 @@ jobs:
                          --arg prbody "$PR_BODY_ESC" \
                          --arg repo "$REPO" \
                          --arg base "$BASE_BRANCH" \
-                         --arg head "$HEAD_BRANCH" '{
-            model: "gpt-4o-mini",
+                         --arg head "$HEAD_BRANCH" \
+                         --arg model "$OPENAI_MODEL" '{
+            model: $model,
             temperature: 0.2,
             max_tokens: 1200,
             messages: [
@@ -142,12 +151,18 @@ jobs:
             ]
           }')
 
-          RESP=$(curl -sS https://api.openai.com/v1/chat/completions \
+          HTTP=$(curl -sS -o resp2.json -w "%{http_code}" https://api.openai.com/v1/chat/completions \
             -H "Authorization: Bearer ${OPENAI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$BODY")
-          SUGGEST=$(echo "$RESP" | jq -r '.choices[0].message.content // "PR 추천 생성 실패"')
-          echo "$SUGGEST" > pr_suggest.md
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::OpenAI API error (HTTP $HTTP)" >&2
+            jq -r '.error.message // . | tostring' resp2.json || cat resp2.json
+            echo "PR 추천 생성 실패: API 오류(HTTP $HTTP)." > pr_suggest.md
+          else
+            jq -r '.choices[0].message.content // "PR 추천 생성 실패"' resp2.json > pr_suggest.md
+          fi
           echo "content_path=pr_suggest.md" >> $GITHUB_OUTPUT
 
       - name: Post PR recommendation as comment
