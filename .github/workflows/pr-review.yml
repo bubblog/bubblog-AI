@@ -2,7 +2,7 @@ name: PR Code Review (AI + Lint)
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]  # 라벨 추가 시 트리거
+    types: [ labeled ]  # 라벨 추가 시 트리거
 
 jobs:
   review:
@@ -52,7 +52,7 @@ jobs:
         if: ${{ contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) }}
         id: ai
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           DIFF_CONTENT="$(cat diff_trunc.txt | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')"
           TITLE="${{ github.event.pull_request.title }}"
@@ -106,7 +106,7 @@ jobs:
         if: ${{ contains(github.event.pull_request.labels.*.name, env.PR_SUGGEST_LABEL) }}
         id: pr_suggest
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           DIFF_FILE: ${{ steps.diff.outputs.diff_path }}
           COMMITS_FILE: ${{ steps.diff.outputs.commits_path }}
           PR_TITLE: ${{ github.event.pull_request.title }}
