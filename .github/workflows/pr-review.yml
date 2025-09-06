@@ -87,7 +87,32 @@ jobs:
             jq -r '.error.message // . | tostring' resp.json || cat resp.json
             echo "자동 생성 리뷰 실패: API 오류(HTTP $HTTP)." > review.md
           else
-            jq -r '.choices[0].message.content // "리뷰 생성 실패"' resp.json > review.md
+            # 다양한 응답 포맷 대비 및 빈 결과 허용
+            jq -er '
+              .choices[0].message.content //
+              .choices[0].text //
+              .message?.content //
+              .output_text //
+              empty
+            ' resp.json > review.md || true
+
+            # 빈 결과 방지: 파일이 비었으면 기본 체크리스트 출력
+            if [ ! -s review.md ]; then
+              DIFF_HEAD=$(head -c 4000 diff_trunc.txt 2>/dev/null || true)
+              cat > review.md << 'FALLBACK'
+                ## 자동 생성 리뷰 실패
+                - 모델 응답이 비어 있거나 파싱에 실패했습니다.
+
+                ### 수동 점검 체크리스트
+                - [ ] 핵심 변경 파일 위험도 검토
+                - [ ] 테스트 케이스 보완 필요 여부
+                - [ ] 보안/성능 영향
+                - [ ] 문서/마이그레이션 여부
+                FALLBACK
+              if [ -n "$DIFF_HEAD" ]; then
+                printf "\n<details><summary>Diff head</summary>\n\n```\n%s\n```\n</details>\n" "$DIFF_HEAD" >> review.md
+              fi
+            fi
           fi
           echo "content_path=review.md" >> $GITHUB_OUTPUT
 
@@ -160,7 +185,34 @@ jobs:
             jq -r '.error.message // . | tostring' resp2.json || cat resp2.json
             echo "PR 추천 생성 실패: API 오류(HTTP $HTTP)." > pr_suggest.md
           else
-            jq -r '.choices[0].message.content // "PR 추천 생성 실패"' resp2.json > pr_suggest.md
+            # 다양한 응답 포맷 대비: chat/completions(.choices[].message.content),
+            # text-completions(.choices[].text), responses(.output_text) 등
+            jq -er '
+              .choices[0].message.content //
+              .choices[0].text //
+              .message?.content //
+              .output_text //
+              empty
+            ' resp2.json > pr_suggest.md || true
+
+            # 빈 결과 방지: 파일이 비었으면 템플릿으로 대체
+            if [ ! -s pr_suggest.md ]; then
+              COMMIT_LIST=""
+              if [ -f "$COMMITS_FILE" ]; then
+                COMMIT_LIST=$(head -n 10 "$COMMITS_FILE" | sed 's/^/- /')
+              fi
+              cat > pr_suggest.md << 'FALLBACK'
+                ## PR 추천(자동 생성 결과 없음)
+                - 원인: 모델 응답이 비었거나 형식이 달라 파싱에 실패했습니다.
+
+                ### 요약
+                - 변경 목적과 효과 3~5줄을 작성하세요
+
+                FALLBACK
+              if [ -n "$COMMIT_LIST" ]; then
+                printf "\n### 커밋 상위 10개\n%s\n" "$COMMIT_LIST" >> pr_suggest.md
+              fi
+            fi
           fi
           echo "content_path=pr_suggest.md" >> $GITHUB_OUTPUT
 
@@ -169,6 +221,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # safety: ensure non-empty body to avoid HTTP 422
+          if [ ! -s pr_suggest.md ]; then
+            echo "## PR 추천(빈 본문 대체)\n자동 생성 결과가 비어 있어 기본 메시지를 게시합니다." > pr_suggest.md
+          fi
+
           PR=${{ github.event.pull_request.number }}
           BODY="$(cat pr_suggest.md)"
           # 주석: 이 코멘트는 라벨 '${{ env.PR_SUGGEST_LABEL }}' 이 있을 때만 게시됩니다.
