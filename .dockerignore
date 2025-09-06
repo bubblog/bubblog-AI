@@ -1,0 +1,22 @@
+# Dependencies
+node_modules
+
+# Git
+.git
+.gitignore
+
+# Docker
+.dockerignore
+Dockerfile
+
+# Documentation
+README.md
+TASK.md
+GEMINI.md
+docs/
+
+# Environment
+.env
+
+# TS build output
+dist
