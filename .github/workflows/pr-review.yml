@@ -75,7 +75,7 @@ jobs:
               {role:"user", content:("PR 제목: " + $title + "\n\nDiff:\n" + $diff)}
             ],
             temperature: 0.2,
-            max_tokens: 1000
+            max_completion_tokens: 1000
           }')
 
           HTTP=$(curl -sS -o resp.json -w "%{http_code}" https://api.openai.com/v1/chat/completions \
@@ -145,7 +145,7 @@ jobs:
                          --arg model "$OPENAI_MODEL" '{
             model: $model,
             temperature: 0.2,
-            max_tokens: 1200,
+            max_completion_tokens: 1200,
             messages: [
               {role:"system", content:$sys},
               {role:"user", content:("Repo: " + $repo + "\nBase→Head: " + $base + "→" + $head + "\nPR 제목: " + $title + "\nPR 본문:\n" + $prbody + "\n\n커밋 로그:\n" + $commits + "\n\nDiff:\n" + $diff)}
