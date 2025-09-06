@@ -1,0 +1,52 @@
+name: "♻️ 프론트엔드 리팩토링 제안"
+description: "프론트엔드 코드(컴포넌트, 스타일, 구조 등)를 리팩토링하거나 개선할 부분을 제안해주세요."
+title: "[♻️ Refactor] "
+labels: "♻️ Refactor"
+body:
+  - type: input
+    attributes:
+      label: 🧩 리팩토링 대상
+      placeholder: ex) PostCard 컴포넌트, useAuth 훅
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: 🔍 리팩토링 사유
+      description: 왜 리팩토링이 필요한지 설명해 주세요. (성능, 유지보수성, 가독성 등)
+      placeholder: |
+        ex) PostCard 컴포넌트에 props가 너무 많고, 한 파일에 로직이 집중되어 있어 가독성이 떨어집니다.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: 🛠 제안하는 개선 방향
+      placeholder: |
+        - [ ] props 분리 및 타입 명확화
+        - [ ] UI 컴포넌트(버튼 등)로 분리
+        - [ ] 불필요한 렌더링 줄이기
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: ⚠️ 고려사항
+      description: 리팩토링 시 주의해야 할 점이 있다면 작성해주세요. (ex. 기존 동작 유지)
+      placeholder: |
+        - [ ] 기존 props 호환성 유지
+        - [ ] 특정 스타일이나 인터랙션 깨지지 않게
+    validations:
+      required: false
+
+  - type: input
+    attributes:
+      label: ⏱ 예상 소요 시간
+      placeholder: ex) 1~2시간, 반나절
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: 🙋🏻 덧붙일 말
+      description: 팀원에게 전하고 싶은 말이 있다면 자유롭게 작성해주세요.

@@ -1,0 +1,178 @@
+name: PR Code Review (AI + Lint)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]  # 라벨 추가 시 트리거
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      AI_REVIEW_LABEL: ai-review   # 변경 가능
+      PR_SUGGEST_LABEL: ai-pr-suggest   # PR 추천 봇 트리거 라벨
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 선택: JS/TS 프로젝트용 Lint (라벨 유무와 무관하게 실행)
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps (if package.json exists)
+        if: ${{ hashFiles('**/package.json') != '' }}
+        run: npm ci || true
+
+      - name: Run lint (fail the check if lint fails)
+        if: ${{ hashFiles('**/package.json') != '' }}
+        run: |
+          if [ -f package.json ]; then
+            npm run -s lint || exit 1
+          fi
+
+      # --- 아래부터 AI 리뷰는 라벨이 있을 때만 실행 ---
+      - name: Skip note if label missing
+        if: ${{ !contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) }}
+        run: "echo \"AI review skipped: missing label '${AI_REVIEW_LABEL}'.\""
+
+      - name: Install tools
+        if: ${{ contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) || contains(github.event.pull_request.labels.*.name, env.PR_SUGGEST_LABEL) }}
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Collect PR diff (unified=0 to shrink)
+        if: ${{ contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) || contains(github.event.pull_request.labels.*.name, env.PR_SUGGEST_LABEL) }}
+        id: diff
+        run: |
+          BASE_REF="${{ github.base_ref }}"
+          git fetch origin "${BASE_REF}"
+          git diff --unified=0 "origin/${BASE_REF}...HEAD" > diff.txt || true
+          head -c 100000 diff.txt > diff_trunc.txt || true
+          echo "diff_path=diff_trunc.txt" >> $GITHUB_OUTPUT
+
+          # 최근 커밋 메시지 수집 (PR 범위) → 50KB로 제한
+          git log --pretty=format:'%h %an %s' "origin/${BASE_REF}...HEAD" > commits.txt || true
+          head -c 50000 commits.txt > commits_trunc.txt || true
+          echo "commits_path=commits_trunc.txt" >> $GITHUB_OUTPUT
+
+      - name: Generate AI review with OpenAI
+        if: ${{ contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) }}
+        id: ai
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          DIFF_CONTENT="$(cat diff_trunc.txt | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')"
+          TITLE="${{ github.event.pull_request.title }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          PROMPT=$(cat << 'EOF'
+          당신은 숙련된 코드 리뷰어입니다. 아래 diff를 검토하여 핵심 문제와 개선안을 간결하게 정리하세요.
+          출력 형식:
+          1) 주요 이슈 – 목록
+          2) 리팩터링/스타일 제안 – 목록
+          3) 영향 범위 및 위험도 – 한 문단
+          4) 체크리스트 – [ ] 형태 5개 내외
+          가능한 한 구체적 라인/파일 언급을 포함하세요.
+          EOF
+          )
+          BODY=$(jq -n --arg sys "$PROMPT" --arg diff "$DIFF_CONTENT" --arg title "$TITLE" '{
+            model: "gpt-4o-mini",
+            messages: [
+              {role:"system", content:$sys},
+              {role:"user", content: ("PR 제목: " + $title + "\n\nDiff:\n" + $diff)}
+            ],
+            temperature: 0.2,
+            max_tokens: 1000
+          }')
+          RESP=$(curl -sS https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          CONTENT=$(echo "$RESP" | jq -r '.choices[0].message.content // "리뷰 생성 실패"')
+          echo "$CONTENT" > review.md
+          echo "content_path=review.md" >> $GITHUB_OUTPUT
+
+      - name: Post review as PR comment
+        if: ${{ contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          BODY="$(cat review.md)"
+          gh api repos/${{ github.repository }}/issues/$PR/comments -f body="$BODY"
+
+      # --- PR 추천 봇 (라벨이 있을 때만 실행) ---
+      - name: Generate PR recommendation (AI)
+        if: ${{ contains(github.event.pull_request.labels.*.name, env.PR_SUGGEST_LABEL) }}
+        id: pr_suggest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DIFF_FILE: ${{ steps.diff.outputs.diff_path }}
+          COMMITS_FILE: ${{ steps.diff.outputs.commits_path }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          DIFF_CONTENT=$(cat "$DIFF_FILE" 2>/dev/null | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+          COMMITS_CONTENT=$(cat "$COMMITS_FILE" 2>/dev/null | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+          PR_BODY_ESC=$(echo "${PR_BODY}" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+
+          read -r -d '' SYS << 'EOS'
+          당신은 숙련된 릴리즈/리뷰 코치입니다. 아래 정보(변경 diff, 커밋 로그, PR 제목/본문)를 바탕으로 "추천 PR 코멘트"를 생성하세요.
+          출력 형식(마크다운):
+          ## PR 추천
+          - **제목 후보(3개)**: 간결한 문장, [type(scope)!]: subject 형태 권장(Conventional Commits)
+          - **요약(3~5줄)**: 왜 변경했고 무엇이 달라졌는지
+          - **본문 템플릿**:
+            - Context
+            - Changes
+            - Breaking Changes (있으면 명시)
+          - **라벨 제안**: bug/feature/refactor/perf/test/docs/chore 중 3개 이내
+          - **참고**: 과도한 추측 금지. 제공된 정보 안에서만 제안.
+          EOS
+
+          BODY=$(jq -n --arg sys "$SYS" \
+                         --arg diff "$DIFF_CONTENT" \
+                         --arg commits "$COMMITS_CONTENT" \
+                         --arg title "$PR_TITLE" \
+                         --arg prbody "$PR_BODY_ESC" \
+                         --arg repo "$REPO" \
+                         --arg base "$BASE_BRANCH" \
+                         --arg head "$HEAD_BRANCH" '{
+            model: "gpt-4o-mini",
+            temperature: 0.2,
+            max_tokens: 1200,
+            messages: [
+              {role:"system", content:$sys},
+              {role:"user", content:("Repo: " + $repo + "\nBase→Head: " + $base + "→" + $head + "\nPR 제목: " + $title + "\nPR 본문:\n" + $prbody + "\n\n커밋 로그:\n" + $commits + "\n\nDiff:\n" + $diff)}
+            ]
+          }')
+
+          RESP=$(curl -sS https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          SUGGEST=$(echo "$RESP" | jq -r '.choices[0].message.content // "PR 추천 생성 실패"')
+          echo "$SUGGEST" > pr_suggest.md
+          echo "content_path=pr_suggest.md" >> $GITHUB_OUTPUT
+
+      - name: Post PR recommendation as comment
+        if: ${{ contains(github.event.pull_request.labels.*.name, env.PR_SUGGEST_LABEL) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          BODY="$(cat pr_suggest.md)"
+          # 주석: 이 코멘트는 라벨 '${{ env.PR_SUGGEST_LABEL }}' 이 있을 때만 게시됩니다.
+          gh api repos/${{ github.repository }}/issues/$PR/comments -f body="$BODY"

@@ -1,0 +1,67 @@
+name: "✨ 프론트엔드 기능 제안"
+description: "프론트엔드에 추가하고 싶은 새로운 기능이나 개선 아이디어를 제안해주세요!"
+title: "[✨ Feature] "
+labels: "✨ Feature"
+body:
+  - type: input
+    attributes:
+      label: 📌 기능 이름
+      placeholder: ex) '다크 모드 지원', '소셜 로그인 버튼 추가'
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: 📖 기능 설명
+      description: 어떤 기능인지, 왜 필요한지 구체적으로 설명해 주세요.
+      placeholder: |
+        ex) 사용자 편의를 위해 다크 모드 기능을 추가합니다. 사용자가 환경에 맞게 밝기 모드를 선택할 수 있도록 합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: ✅ 구현 항목
+      description: 구체적인 작업 항목을 체크리스트 형태로 작성해 주세요.
+      placeholder: |
+        - [ ] 다크 모드 토글 버튼 추가
+        - [ ] localStorage에 모드 상태 저장
+        - [ ] Tailwind 다크 모드 클래스 적용
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: ⚠️ 개발 시 유의사항
+      description: 개발할 때 주의할 점이 있다면 작성해 주세요.
+      placeholder: |
+        - [ ] SSR 환경에서도 초기 다크 모드 반영
+        - [ ] 사용자가 선택한 모드가 새로고침 후에도 유지되도록 처리
+    validations:
+      required: false
+
+  - type: dropdown
+    attributes:
+      label: 🧭 관련 도메인
+      options:
+        - 공통 컴포넌트(Common)
+        - 사용자(User)
+        - 인증(Auth)
+        - 게시글(Post)
+        - 챗봇(Chatbot)
+        - 기타(Etc)
+      description: 이 기능이 어느 파트에 속하는지 선택해 주세요.
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: 🕰 예상 소요 시간
+      placeholder: ex) 2시간, 반나절, 하루
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: 🙋🏻 덧붙일 말
+      description: 팀원에게 추가로 전하고 싶은 말이 있으면 자유롭게 작성해주세요.
