@@ -74,7 +74,6 @@ jobs:
               {role:"system", content:$sys},
               {role:"user", content:("PR 제목: " + $title + "\n\nDiff:\n" + $diff)}
             ],
-            temperature: 0.2,
             max_completion_tokens: 1000
           }')
 
@@ -144,7 +143,6 @@ jobs:
                          --arg head "$HEAD_BRANCH" \
                          --arg model "$OPENAI_MODEL" '{
             model: $model,
-            temperature: 0.2,
             max_completion_tokens: 1200,
             messages: [
               {role:"system", content:$sys},
