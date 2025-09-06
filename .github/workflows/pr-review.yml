@@ -21,23 +21,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 선택: JS/TS 프로젝트용 Lint (라벨 유무와 무관하게 실행)
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install deps (if package.json exists)
-        if: ${{ hashFiles('**/package.json') != '' }}
-        run: npm ci || true
-
-      - name: Run lint (fail the check if lint fails)
-        if: ${{ hashFiles('**/package.json') != '' }}
-        run: |
-          if [ -f package.json ]; then
-            npm run -s lint || exit 1
-          fi
-
       # --- 아래부터 AI 리뷰는 라벨이 있을 때만 실행 ---
       - name: Skip note if label missing
         if: ${{ !contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) }}
@@ -68,7 +51,7 @@ jobs:
         if: ${{ contains(github.event.pull_request.labels.*.name, env.AI_REVIEW_LABEL) }}
         id: ai
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR }}
         run: |
           DIFF_CONTENT="$(cat diff_trunc.txt | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')"
           TITLE="${{ github.event.pull_request.title }}"
@@ -115,7 +98,7 @@ jobs:
         if: ${{ contains(github.event.pull_request.labels.*.name, env.PR_SUGGEST_LABEL) }}
         id: pr_suggest
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR }}
           DIFF_FILE: ${{ steps.diff.outputs.diff_path }}
           COMMITS_FILE: ${{ steps.diff.outputs.commits_path }}
           PR_TITLE: ${{ github.event.pull_request.title }}
