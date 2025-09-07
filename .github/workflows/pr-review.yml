@@ -6,7 +6,7 @@ permissions:
 
 on:
   pull_request:
-    types: [labeled] # 실행을 최소로 하기위해 라벨 추가 시에만 작동
+    types: [ opened, reopened ]
 
 env:
   AI_REVIEW_LABEL: ai-review          # 이 라벨이 있으면 코드 리뷰 수행(anc95 액션)
@@ -25,7 +25,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MODEL: gpt-4o-mini
           LANGUAGE: Korean
-          max_tokens: 10000
+          max_tokens: 5000
           PROMPT: "PR diff에서 코딩 스타일, 변수명 체크 및 코드 리뷰를 간결히 제시; 영향·리스크·테스트 계획 1~2줄;"
           
   pr-suggest:
@@ -39,5 +39,5 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           MODEL: gpt-4o-mini
           LANGUAGE: Korean
-          max_tokens: 10000
+          max_tokens: 5000
           PROMPT: "PR 추천(마크다운): 제목(Conventional), 요약 3~5줄(의도·변경·영향), 본문(Context/Changes/Breaking); 제공 정보만 사용, 추측 금지."
