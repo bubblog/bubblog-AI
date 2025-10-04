@@ -16,6 +16,8 @@ const configSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_CHAT_MODEL: z.string().default('gemini-2.5-flash'),
   GEMINI_THINKING_BUDGET: z.string().optional(),
+  LLM_COST_LOG: z.string().default('false'),
+  LLM_COST_ROUND: z.coerce.number().default(4),
 });
 
 const config = configSchema.parse(process.env);
