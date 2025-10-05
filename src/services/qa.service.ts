@@ -151,6 +151,17 @@ export const answerStream = async (
     } catch {}
 
     llmStream.on('data', (chunk) => {
+      try {
+        const str = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+        console.log(
+          JSON.stringify({
+            type: 'debug.qa.chunk',
+            at: Date.now(),
+            bytes: Buffer.byteLength(str, 'utf8'),
+            preview: str.slice(0, 40).replace(/\n/g, '\\n'),
+          })
+        );
+      } catch {}
       stream.write(chunk);
     });
     llmStream.on('end', () => {

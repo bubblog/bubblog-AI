@@ -84,9 +84,15 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
         // GPT-5 family: omit temperature/top_p; allow reasoning/text controls
         if (req.options?.reasoning_effort) {
           respParams.reasoning = { effort: req.options.reasoning_effort };
+        } else {
+          // 기본값: 생각(추론) 강도를 최소화하여 지연을 줄임
+          respParams.reasoning = { effort: 'minimal' };
         }
         if (req.options?.text_verbosity) {
           respParams.text = { verbosity: req.options.text_verbosity };
+        } else {
+          // Encourage text output on GPT-5 if not specified
+          respParams.text = { verbosity: 'low' };
         }
         try {
           console.log(
@@ -96,23 +102,54 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
         const responsesStream: any = await (openai as any).responses.stream(respParams);
 
         let loggedFirstDelta = false;
-        responsesStream.on('response.output_text.delta', (delta: string) => {
-          if (delta) {
+        responsesStream.on('response.output_text.delta', (ev: any) => {
+          const text = typeof ev === 'string' ? ev : ev?.delta ?? '';
+          if (text) {
             safeWrite(`event: answer\n`);
-            safeWrite(`data: ${JSON.stringify(delta)}\n\n`);
+            safeWrite(`data: ${JSON.stringify(text)}\n\n`);
+            try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length, at: Date.now() })); } catch {}
             if (!loggedFirstDelta) {
-              try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: delta.length })); } catch {}
+              try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length })); } catch {}
               loggedFirstDelta = true;
             }
           }
         });
 
         // Stream tool-call arguments as answer chunks to maintain SSE shape
-        responsesStream.on('response.tool_call.delta', (toolDelta: any) => {
-          const argsDelta = toolDelta?.arguments_delta || toolDelta?.arguments || '';
+        responsesStream.on('response.tool_call.delta', (ev: any) => {
+          const argsDelta = ev?.arguments_delta || ev?.arguments || ev?.delta || '';
           if (argsDelta) {
             safeWrite(`event: answer\n`);
             safeWrite(`data: ${JSON.stringify(argsDelta)}\n\n`);
+          }
+        });
+
+        // Catch-all messages to ensure we don't miss alternative text events
+        responsesStream.on('message', (msg: any) => {
+          try {
+            const m = typeof msg === 'string' ? JSON.parse(msg) : msg;
+            if (!m) return;
+            // Prefer explicit output_text delta
+            if (m.type === 'response.output_text.delta' && m.delta) {
+              safeWrite(`event: answer\n`);
+              safeWrite(`data: ${JSON.stringify(m.delta)}\n\n`);
+            }
+            // Some SDKs may emit full output_text chunk at once
+            else if (m.type === 'response.output_text' && typeof m.text === 'string') {
+              safeWrite(`event: answer\n`);
+              safeWrite(`data: ${JSON.stringify(m.text)}\n\n`);
+            }
+            // Generic delta fallback
+            else if (m.type === 'response.delta' && typeof m.delta === 'string') {
+              safeWrite(`event: answer\n`);
+              safeWrite(`data: ${JSON.stringify(m.delta)}\n\n`);
+            }
+            // Log for visibility
+            console.log(
+              JSON.stringify({ type: 'debug.openai.msg', mtype: m.type, keys: Object.keys(m || {}) })
+            );
+          } catch (e) {
+            try { console.log(JSON.stringify({ type: 'debug.openai.msg_parse_error' })); } catch {}
           }
         });
 
@@ -134,8 +171,12 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           } catch {}
         });
 
-        // Ensure the stream starts and we await its completion
-        await responsesStream.done();
+        // Do not await completion here; return immediately so callers can consume deltas in real-time
+        (async () => {
+          try {
+            await responsesStream.done();
+          } catch {}
+        })();
         return stream;
       } catch (e) {
         // Fallback to non-streaming Responses if streaming path fails
@@ -147,6 +188,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
             max_output_tokens: req.options?.max_output_tokens,
           };
           if (req.options?.reasoning_effort) createParams.reasoning = { effort: req.options.reasoning_effort };
+          else createParams.reasoning = { effort: 'low' };
           if (req.options?.text_verbosity) createParams.text = { verbosity: req.options.text_verbosity };
           try {
             console.log(
@@ -207,30 +249,39 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
       max_tokens: req.options?.max_output_tokens as any,
     });
 
-    for await (const chunk of chatStream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      const toolCalls = chunk.choices[0]?.delta?.tool_calls;
+    // Iterate asynchronously; return stream immediately to allow real-time consumption
+    (async () => {
+      try {
+        for await (const chunk of chatStream) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          const toolCalls = chunk.choices[0]?.delta?.tool_calls;
 
-      if (toolCalls) {
-        for (const toolCall of toolCalls) {
-          if (toolCall.function?.arguments) {
+          if (toolCalls) {
+            for (const toolCall of toolCalls) {
+              if (toolCall.function?.arguments) {
+                safeWrite(`event: answer\n`);
+                safeWrite(`data: ${JSON.stringify(toolCall.function.arguments)}\n\n`);
+              }
+            }
+          } else if (content) {
             safeWrite(`event: answer\n`);
-            safeWrite(`data: ${JSON.stringify(toolCall.function.arguments)}\n\n`);
+            safeWrite(`data: ${JSON.stringify(content)}\n\n`);
+          }
+
+          if (chunk.choices[0]?.finish_reason) {
+            safeWrite(`event: end\n`);
+            safeWrite(`data: [DONE]\n\n`);
+            safeEnd();
+            try { console.log(JSON.stringify({ type: 'debug.openai.completed', path: 'chat.completions.stream' })); } catch {}
+            break;
           }
         }
-      } else if (content) {
-        safeWrite(`event: answer\n`);
-        safeWrite(`data: ${JSON.stringify(content)}\n\n`);
-      }
-
-      if (chunk.choices[0]?.finish_reason) {
-        safeWrite(`event: end\n`);
-        safeWrite(`data: [DONE]\n\n`);
+      } catch (e) {
+        safeWrite(`event: error\n`);
+        safeWrite(`data: ${JSON.stringify({ message: 'Internal server error' })}\n\n`);
         safeEnd();
-        try { console.log(JSON.stringify({ type: 'debug.openai.completed', path: 'chat.completions.stream' })); } catch {}
-        break;
       }
-    }
+    })();
 
     return stream;
   } catch (err) {
