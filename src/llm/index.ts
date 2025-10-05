@@ -67,6 +67,13 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
   let buffer = '';
   let outputText = '';
 
+  // Debug: start info
+  try {
+    console.log(
+      JSON.stringify({ type: 'debug.llm.start', provider, model, messages: (messages || []).length })
+    );
+  } catch {}
+
   const flushBuffer = () => {
     // Split by double newline to get SSE events
     const chunks = buffer.split('\n\n');
@@ -130,6 +137,11 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
       };
       console.log(JSON.stringify(post));
     }
+    try {
+      console.log(
+        JSON.stringify({ type: 'debug.llm.end', provider, model, durationMs, outputChars: outputText.length })
+      );
+    } catch {}
     outer.end();
   });
   providerStream.on('error', (e) => {
@@ -138,6 +150,11 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
         JSON.stringify({ type: 'llm.error', corrId, provider, model, message: (e as any)?.message || 'error' })
       );
     }
+    try {
+      console.error(
+        JSON.stringify({ type: 'debug.llm.error', provider, model, message: (e as any)?.message || 'error' })
+      );
+    } catch {}
     outer.emit('error', e);
   });
 
