@@ -1,188 +1,293 @@
-## 작업 계획
+# v2 설계 및 작업 계획 (LLM 주도 SQL 기반 시맨틱 서치 → 응답 스트리밍)
 
-작업 순서
-- 1) LLM 모듈화(퍼사드/프로바이더/모델 레지스트리) + GPT-5 mini 기본 적용
-- 2) Gemini 도입: 병행 사용(전용) + 대체 사용(퍼사드)
-- 3) 토큰 카운트 및 비용 로깅 추가(양 프로바이더 공통)
+## 목표
+- v1 API/흐름은 그대로 유지.
+- v2에서 질의를 LLM이 “검색 계획(계획 JSON)”으로 변환 → 서버가 안전하게 실행하여 컨텍스트 확보 → 확보한 컨텍스트와 함께 LLM에 넘겨 최종 답변을 SSE로 스트리밍.
 
-참고: 아래 문서의 섹션 순서와 무관하게 실제 구현 순서는 위의 "작업 순서"를 따릅니다.
+## 적합성 평가 (요약)
+- 장점
+  - LLM이 질문 의도를 기반으로 동적 필터/가중치/Top-K/Threshold를 튜닝한 “검색 계획”을 생산하여 검색 적합도를 끌어올릴 수 있음.
+  - DB 스키마/비즈니스 제약을 반영해 검색 전략을 바꾸기 쉬움(프롬프트/제약 업데이트로 최적화 가능).
+- 리스크 및 보완
+  - “LLM이 직접 SQL 문자열”은 주입/스키마 일탈 위험. 안전하게 “계획(JSON)”을 생성하게 하고, 서버가 화이트리스트 템플릿/파라미터 바인딩으로 SQL을 구성하는 방식 권장.
+  - 벡터 연산 상 LLM은 임베딩을 생성할 수 없으므로, 서버가 질문 임베딩을 계산하여 파라미터로 주입해야 함.
+  - 실패/부적합 시 v1 RAG 경로로 폴백 필요.
 
+결론: “LLM → 검색 계획(JSON) → 서버가 안전 SQL 구성/실행 → 결과 컨텍스트로 최종 LLM”의 변형 설계가 적합하며 안전/유지보수에도 유리.
 
-### 1) LLM 모듈화(퍼사드/프로바이더/모델 레지스트리) + GPT-5 mini 기본 적용
+## v2 전체 흐름
+1) 클라이언트가 `POST /ai/v2/ask`로 질문 전송(SSE 응답).
+2) 서버가 LLM에 “검색 계획” 생성을 요청(계획 JSON; SQL 문자열 생성은 비권장, 옵션으로 지원).
+3) 서버가 계획(JSON)을 검증/정규화 후 파라미터 바인딩으로 안전 SQL 실행(벡터 임베딩은 서버가 생성).
+4) 검색 결과(문맥) 메타 이벤트 송신(`search_plan`, `search_result`).
+5) 기존 v1과 동일한 형식의 최종 LLM 호출을 수행하고 `answer`를 스트리밍.
+6) 종료 시 `end: [DONE]` 송신.
 
-목적: LLM 호출을 모듈화하여 옵션 기반으로 모델/프로바이더를 교체 가능하게 만들고, 기본 모델을 `gpt-5-mini`로 전환합니다. 토크나이저/가격표는 3단계에서 처리합니다.
+## API 설계
+- Route: `POST /ai/v2/ask` (SSE)
+- Auth: 기존 `authMiddleware` 재사용
+- Request Body (제안)
+  - `question: string`
+  - `user_id: string`
+  - `category_id?: number`
+  - `post_id?: number` (지정 시 해당 글 컨텍스트 중심)
+  - `speech_tone?: number`
+  - `llm?: { provider?: 'openai'|'gemini', model?: string, options?: { temperature?: number, top_p?: number, max_output_tokens?: number } }`
+- SSE 이벤트(순서 권장)
+  - `event: search_plan` / `data: { ...계획JSON }`
+  - `event: search_sql` / `data: { templateId, paramsPreview }` (SQL 템플릿 경로 선택 시, 민감정보 제외 프리뷰)
+  - `event: search_result` / `data: [{ postId, postTitle }]`
+  - `event: exist_in_post_status` / `data: true|false` (v1과 동일)
+  - `event: context` / `data: [{ postId, postTitle }]` (v1과 동일)
+  - `event: answer` (여러 번)
+  - `event: end` / `data: [DONE]`
+  - `event: error` (오류 시)
 
-1. [구조] 파일/모듈 구성
-   - 디렉토리: `src/llm/`
-     - `src/llm/types.ts` — 공통 인터페이스 정의
-       - `GenerateRequest`: `{ provider?: 'openai'|'gemini', model?: string, messages?: OpenAIStyleMessages, contents?: GeminiStyleContents, stream?: boolean, tools?, options?: { temperature?, top_p?, max_output_tokens?, reasoning?, text? }, meta?: { userId?, categoryId?, postId? } }`
-       - `GenerateStream`: `onToken(text)`, `onToolCall(json)`, `onEnd()`, `onError(err)`(또는 AsyncIterable)
-     - `src/llm/modelRegistry.ts` — 모델 레지스트리/기본값
-       - 논리 모델 키 → `{ provider, modelId, defaults, tokenizerKey?, pricingKey? }`
-       - 기본값: `defaultChat = { provider: 'openai', modelId: 'gpt-5-mini' }`
-     - `src/llm/providers/openaiResponses.ts` — OpenAI Responses API 구현
-     - `src/llm/providers/gemini.ts` — @google/gemini 구현
-     - `src/llm/index.ts` — 퍼사드: `generate(req: GenerateRequest): GenerateStream` 선택 라우팅
-   - 기존 서비스(`qa.service.ts`)는 퍼사드만 사용하도록 변경
+## LLM “검색 계획” 출력 스키마(권장)
+```json
+{
+  "mode": "rag",                  // "rag" | "post"
+  "top_k": 5,                      // 1~20 범위 권장
+  "threshold": 0.2,                // 0.0~1.0, 유사도 하한
+  "weights": { "chunk": 0.7, "title": 0.3 },
+  "filters": {
+    "user_id": "<server-provided>",
+    "category_ids": [7],           // 필요 시
+    "post_id": 123,                // mode=post 시
+    "time": {                      // 시간/날짜 필터(선택)
+      "type": "relative",         // "relative" | "absolute" | "month" | "year" | "quarter"
+      "unit": "day",              // relative: "day" | "week" | "month" | "year"
+      "value": 30                  // relative: 정수(양수)
+      // absolute: { from: ISO8601, to: ISO8601 }
+      // month: { month: 1..12, year?: number }
+      // year: { year: number }
+      // quarter: { quarter: 1..4, year?: number }
+    }
+  },
+  "sort": "created_at_desc",       // "created_at_desc" | "created_at_asc"
+  "limit": 5                       // 결과 행 상한(서버 상한 적용)
+}
+```
+- 서버에서 Zod로 검증 후 기본값/상한선 적용(top_k max 10 등), 불일치 시 안전 폴백값 적용.
+- SQL 템플릿은 서버가 선택/생성하며, 파라미터는 모두 바인딩 처리.
 
-2. [기본 모델] GPT-5 mini 적용(Responses API)
-   - `src/config.ts`의 `CHAT_MODEL` 기본값을 `gpt-5-mini`로 변경
-   - OpenAI 경로: `openai.responses.create/stream`로 마이그레이션(SSE 어댑터 포함)
-   - 기존 Chat Completions 경로는 임시 백업/옵션으로 유지 가능(필요 시)
+### 시간/날짜 필터 처리 규칙
+- 서버 표준화 단계에서만 절대 기간으로 변환(Asia/Seoul 기준 권장):
+  - relative: 현재 시각 기준으로 from/to 계산(예: 최근 30일)
+  - month: 연도 미지정 시 현재 연도 사용(예: “9월” → 올해 9월 1일 00:00:00 ~ 9월 말 23:59:59)
+  - quarter/year: 분기·연도 경계 계산
+- 검증 실패·모호 값: 날짜 필터 제외 혹은 기본 30일 적용 후 로그 남기고 폴백
+- 모든 상수값은 서버에서 범위 강제(limit<=20, top_k<=10, threshold 0..1, weights 합=1)
 
-3. [옵션 기반 모델/프로바이더 선택]
-   - 요청 바디에 `llm?: { provider?: 'openai'|'gemini', model?: string, options?: {...} }` 허용
-   - 미지정 시 레지스트리의 기본값 사용(`gpt-5-mini` on OpenAI)
-   - 향후 기능(Reasoning/Text 옵션, tool calls, timeout 등) 확장 용이
+## SQL 실행(안전 구성)
+- 벡터 임베딩: 서버가 `createEmbeddings([question])`로 생성.
+- 화이트리스트 템플릿(예시)
+  - 공통: 사용자/카테고리/소유권 필터를 CTE에서 먼저 적용.
+  - 스코어링: `(w_chunk * (1 - (pc.embedding <=> $embed))) + (w_title * (1 - (pte.embedding <=> $embed))) AS score`
+  - 임계치: `WHERE (1 - (pc.embedding <=> $embed)) > $threshold`
+  - 날짜 필터: `AND bp.created_at BETWEEN $from AND $to` (표준화된 절대 기간 사용)
+  - 정렬/상한: `ORDER BY score DESC` + 옵션 정렬(`created_at_desc|asc`) 병합, `LIMIT $limit`
+- 모든 동적 값은 파라미터로 바인딩하고, 가중치/상한 등은 서버에서 범위 제한.
 
-4. [검증/수용 기준]
-   - `/ai/ask` SSE 정상 동작(중단/지연 없음)
-   - 기존 프롬프트/툴 호출이 동일하게 동작(필요 시 어댑터)
-   - 로그/오류 처리 기존 수준 유지
-   
-### 2) Gemini 도입: 병행 사용(전용) + 대체 사용(퍼사드)
+## 최종 LLM 호출(응답 생성)
+- v1의 `generate` 재사용(프로바이더/모델 동일 정책).
+- 프롬프트: v1의 `qa.prompts`를 재사용하되, v2에서는 `search_result` 컨텍스트를 그대로 투입.
+- v1과 동일한 `report_content_insufficient` 툴 전략 유지(필요 시).
 
-목적: Gemini를 독립 엔드포인트로 직접 쓰는 경로와, 기존 GPT 경로의 대체 제공자로 모두 사용할 수 있게 합니다(퍼사드 경유). 이후 3단계에서 토큰/비용 로깅을 공통 적용합니다.
+## 디렉터리/컴포넌트 추가 계획
+- `src/routes/ai.v2.routes.ts` — v2 라우터(`POST /ask`).
+- `src/controllers/ai.v2.controller.ts` — SSE 헤더 설정, 서비스 호출/파이프.
+- `src/services/search-plan.service.ts` — LLM에 검색 계획 요청 및 스키마 검증.
+- `src/services/semantic-search.service.ts` — 계획(JSON)→SQL 템플릿 매핑 및 안전 실행.
+- `src/services/qa.v2.service.ts` — 전체 orchestrator: 계획 생성→검색→컨텍스트 이벤트→최종 LLM 스트림.
+- `src/prompts/qa.v2.prompts.ts` — 검색 계획 LLM 프롬프트(스키마/제약 포함).
+- `src/types/ai.v2.types.ts` — 요청/계획/응답 타입/Zod 스키마.
+- `src/routes/ai.routes.ts`는 그대로, `app.ts`에 `/ai/v2` 라우트 추가.
 
-1. [Config] Gemini 키/모델 설정
-   - `.env`
-     - `GEMINI_API_KEY=...`
-     - `GEMINI_CHAT_MODEL=gemini-2.5-flash` (예: 변경 가능)
-   - `src/config.ts`에 항목 반영 및 기본값/검증 추가(Provider 고정 ENV는 사용하지 않음)
+## 프롬프트 가이드(검색 계획용, 요지)
+- 역할: “블로그 시맨틱 검색 플래너”.
+- 입력: 질문, 사용자 메타(user_id/category_id/post_id), 스키마/제약 요약, 기본값.
+- 출력: 상기 계획 JSON 스키마만 생성(그 외 텍스트 금지).
+- 제약: 값 범위(Top-K, threshold, weights 합=1), 허용된 필드만.
+- 실패 시: 기본값으로 귀결되는 최소 계획을 출력하도록 유도.
+- 시간/날짜 처리 지침:
+  - 시스템 메시지에 현재 날짜/시간과 타임존(예: Asia/Seoul)을 제공
+  - “최근/이번 달/지난주/9월/작년 9월” 등 자연어 시간을 위 스키마의 time 필드로 구조화
+  - 연도 미지정 시 현재 연도 가정, 모호하면 relative 30일로 유도
 
-2. [Provider] 퍼사드에 Gemini 구현 추가
-   - 1단계에서 만든 LLM 퍼사드(`src/llm/index.ts`)에 Gemini 프로바이더를 추가
-   - 구현 위치: `src/llm/providers/gemini.ts` (OpenAI 구현은 `src/llm/providers/openaiResponses.ts`)
-   - 퍼사드 인터페이스로 라우팅되어 기존 `qa.service.ts`는 퍼사드만 사용(교체 투명)
+## 예시
+- “최근 글 보여줘”
+  - LLM 계획(JSON): `{ "mode": "rag", "top_k": 5, "threshold": 0.2, "weights": { "chunk": 0.7, "title": 0.3 }, "filters": { "user_id": "<server>", "time": { "type": "relative", "unit": "day", "value": 30 } }, "sort": "created_at_desc", "limit": 5 }`
+  - 서버 표준화: `time → absolute { from: <30일 전 00:00+09:00>, to: <지금+09:00> }`, `limit=5`
 
-3. [Gemini 호출] @google/genai SDK 적용 및 스트리밍
-   - 의존성: `@google/genai` 추가 (설치 커맨드: `npm i @google/genai`)
-   - 클라이언트: `import { GoogleGenAI } from "@google/genai"; const ai = new GoogleGenAI({});` (`GEMINI_API_KEY`는 환경변수에서 자동 주입)
-   - 비스트리밍(우선 적용):
-     - `ai.models.generateContent({ model: GEMINI_CHAT_MODEL, contents, config: { thinkingConfig: { thinkingBudget }}})`
-     - 기본값으로 `thinkingBudget=0`(생각 비활성화) 적용, `.env`에서 오버라이드 가능
-     - 응답 텍스트를 한번에 수신한 뒤 SSE로 순차 chunk 분할하여 `answer` 이벤트로 전송(간단 구현)
-   - 스트리밍(선택 적용):
-     - SDK 제공 시 스트리밍 API 사용(예: `generateContentStream` 유사 기능)으로 델타를 받아 즉시 SSE로 전달
-     - SDK에서 미지원일 경우, 비스트리밍으로 우선 릴리즈 후 스트리밍 전환
-   - (옵션) Safety 설정, generationConfig(temperature/topP/maxOutputTokens) 파라미터는 설정값으로 노출
+- “9월 글 2개”
+  - LLM 계획(JSON): `{ "mode": "rag", "top_k": 5, "threshold": 0.2, "weights": { "chunk": 0.7, "title": 0.3 }, "filters": { "user_id": "<server>", "time": { "type": "month", "month": 9 } }, "sort": "created_at_desc", "limit": 2 }`
+  - 서버 표준화: `time → absolute { from: YYYY-09-01T00:00:00+09:00, to: YYYY-09-30T23:59:59+09:00 } (연도 미지정 시 올해)`, `limit=2`
 
-5. [토큰 카운팅] Gemini 대응
-   - 사전 카운트(가능 시): SDK의 토큰 카운트 API(`tokens:count`/`countTokens`)가 제공되면 이를 사용해 프롬프트 토큰 계산 → 비용 선로깅
-     - 네트워크 요청이므로 로깅 토글이 켜져 있을 때만 수행하도록 옵션화
-   - 사후 카운트: 응답 텍스트 기준 동일 API로 출력 토큰 계산(또는 비가용 시 근사치)
-   - 폴백 전략: 카운트 API가 불가한 환경에서는 근사치 사용(문자수/4), 추후 정확도 개선 시 교체
+## 폴백 전략
+- 계획 JSON 검증 실패/LLM 오류 → v1 RAG 경로로 폴백.
+- 검색 결과 0건 → v1과 동일하게 `exist_in_post_status=false` 전송 후, 부족 안내 규칙에 맞춰 답변 유도.
 
-6. [가격 정책] Gemini 추가
-   - `src/config/pricing.ts`의 `PRICING_TABLE`에 Gemini 모델(`gemini-2.5-flash`, 임베딩 모델 등) 단가 추가
-   - 동일한 `calcCost`, `formatCost` 로직 재사용
+## 텔레메트리/비용
+- `llm.request/llm.response` 로그 기존 그대로 사용.
+- v2 전용 디버그 이벤트: `debug.plan.start`, `debug.plan.json`, `debug.plan.sql`, `debug.plan.result` 등.
 
-7. [생각(Thinking) 설정] 기본 비활성화
-   - Gemini 2.5 Flash의 생각 기능은 응답 품질 대신 비용/지연이 증가하므로 기본 `thinkingBudget=0`으로 비활성화
-   - `.env`에 `GEMINI_THINKING_BUDGET`를 두어 필요 시 활성화(정수값)
+## 마이그레이션/DB
+- 추가 테이블 불필요(기존 `post_chunks`, `post_title_embeddings` 재사용).
+- 필요 시 뷰/인덱스 최적화 검토: `post_chunks(post_id, embedding)`, `post_title_embeddings(post_id, embedding)`.
 
-8. [도구/함수 호출] 호환성 계획(선택)
-   - 현재 OpenAI `tool_calls`를 사용 중. Gemini는 `functionDeclarations`/`toolConfig` 형태로 유사 기능 제공
-   - 1단계: Gemini 경로에서는 도구 호출 비활성화(빠른 도입)
-   - 2단계: 필요 시 `report_content_insufficient`를 Gemini `functionDeclarations`로 매핑하여 동일 동작 구현
+## 보안/안전장치
+- LLM은 “계획 JSON”만 생성(기본). SQL은 서버가 템플릿/파라미터 바인딩으로 생성.
+- 만약 SQL 문자열 모드가 필요하면: 템플릿 ID+파라미터만 허용하거나, 정규식/AST로 화이트리스트 검증 후 실행.
+- SSE에 민감 값(user_id/token 등) 노출 금지.
 
-9. [Wiring] 사용 패턴
-   - 독립 사용(A): `POST /ai/gemini/ask`로 직접 호출(옵션: thinkingBudget 등)
-   - 대체 사용(B): 기존 `POST /ai/ask`에 `llm.provider?: 'openai'|'gemini'`, `llm.model?` 허용 → 퍼사드가 라우팅
-   - 로깅 시 `provider` 필드를 포함(3단계에서 적용)
+## 단계별 작업(체크리스트)
+1) 스켈레톤
+   - [ ] 라우터/컨트롤러 v2 추가(`/ai/v2/ask`)
+   - [ ] SSE 헤더/에러 핸들링 공통화
+2) 검색 계획
+   - [ ] `search-plan.service` + `qa.v2.prompts` + Zod 스키마
+   - [ ] 계획 실패 시 v1 경로 폴백
+3) 검색 실행
+   - [ ] 임베딩 생성(질문)
+   - [ ] 템플릿 기반 안전 SQL 실행 + 파라미터 바인딩
+   - [ ] `search_plan`, `search_result` SSE 송신
+4) 최종 응답 스트림
+   - [ ] v1 `generate` 재사용하여 LLM 스트림
+   - [ ] v1과 동일한 `answer`/`end`/`error` 이벤트 유지
+5) 관측성/테스트
+   - [ ] 디버그/비용 로그 연결
+   - [ ] 단위 테스트: 계획 검증/템플릿 빌더/리포지토리
+   - [ ] 통합 테스트: SSE 이벤트 순서/형식
 
-10. [검증/수용 기준]
-   - OpenAI/Gemini 각각에서 동일한 SSE 응답 형식으로 동작
-   - 요청 전/후 토큰·비용 로그가 두 프로바이더 모두에서 출력
-   - 로깅 토글이 정상 작동, 스트리밍 성능 저하 없음
+## 수용 기준(AC)
+- `/ai/v2/ask`가 SSE로 동작하고, `search_plan`→`search_result`→`answer` 순으로 이벤트가 수신된다.
+- 계획 JSON이 범위를 벗어나거나 실패해도 서버는 안전 폴백으로 정상 응답을 스트리밍한다.
+- SQL은 파라미터 바인딩으로만 구성되며, 화이트리스트 템플릿을 벗어난 질의가 실행되지 않는다.
+- v1과 동일한 최종 응답 품질을 유지하거나 개선한다.
 
-설정 확정
-- `GEMINI_CHAT_MODEL=gemini-2.5-flash`
-- `GEMINI_THINKING_BUDGET=0` (기본값으로 비활성화)
+## 검색 계획 LLM 프롬프트(초안)
 
-### 토큰 카운트 및 비용 로깅 추가
+목표: LLM이 “검색 계획 JSON”만 출력하도록 강제하여 서버가 안전하게 SQL 템플릿을 선택·실행할 수 있도록 한다. 자연어 시간(최근/이번 달/지난주/9월/작년 9월 등)을 구조화하고, 정렬/상한/가중치/임계치 값 제약을 지키도록 한다.
 
-목적: LLM에 요청을 보내기 직전에 프롬프트(메시지) 토큰 수를 계산해 예상 입력 비용을 콘솔로 로깅하고, 스트리밍 응답 완료 후 실제 출력 토큰 수 기반 최종 비용을 추가 로깅합니다. 초기에는 `console.log`만 사용합니다.
+입력 변수(서버가 주입)
+- now_utc, now_kst: 현재 시간(ISO8601)
+- timezone: 문자열(예: Asia/Seoul)
+- user_id: 요청자의 사용자 ID
+- category_id?: 선택, 존재 시 조상 기준 필터
+- post_id?: 선택, 존재 시 mode=post 우선
+- defaults: { top_k: 5, threshold: 0.2, weights: { chunk: 0.7, title: 0.3 }, sort: created_at_desc, limit: 5 }
+- question: 사용자 질문 원문
 
-1. [Utils] 토크나이저 유틸 추가
-   - 파일: `src/utils/tokenizer.ts`
-   - 내용:
-     - `getTokenizerForModel(model: string)` → 모델명에 따라 적절한 인코딩을 선택
-       - `gpt-5*` → 자료 제공 전까지 임시로 `o200k_base` 사용(TBD, 전환 시 교체)
-       - `gpt-4o`, `gpt-4o-mini`, 기타 `o`계열 → `o200k_base`
-     - `countTextTokens(text: string, model: string): number`
-     - `countChatMessagesTokens(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], model: string): number`
-       - 메시지 `content`들을 토크나이즈하여 합산하고, 채팅 포맷 오버헤드(메시지당 소량, 모델별 상수)를 보정치로 가산
-       - 주의: 보정치는 근사치이며, 정확한 정산은 응답 토큰 합산으로 후처리
-   - 비고: 이미 프로젝트에 `@dqbd/tiktoken`이 포함되어 있으므로 이를 사용합니다.
+출력 형식(반드시 엄수)
+- 오직 하나의 JSON 객체만 출력. 추가 텍스트/주석/마크다운/설명 금지.
+- 키/값은 스키마 내 필드만 사용. 불필요 필드 생성 금지.
 
-2. [Config] 가격 정책 맵 구조 설계 (임시 하드코딩 + ENV 오버라이드)
-   - 파일: `src/config/pricing.ts`
-   - 내용:
-     - `export type Pricing = { input_per_1k: number; output_per_1k: number; cached_input_per_1k?: number; currency: 'USD' | 'KRW' }`
-     - `PRICING_TABLE: Record<string, Pricing>`: 모델명 키에 따른 단가 설정
-     - 선택: `LLM_PRICING_OVERRIDES`(JSON) 환경변수로 런타임 오버라이드 허용
-   - 초기값은 사용자 제공 정책으로 채울 예정. 제공 전까지는 로깅에 `N/A` 표기 또는 0 처리.
+스키마(재확인)
+{
+  "mode": "rag" | "post",
+  "top_k": number,                 // 1..10
+  "threshold": number,            // 0..1
+  "weights": { "chunk": number, "title": number }, // 0..1, 합=1
+  "filters": {
+    "user_id": string,
+    "category_ids"?: number[],     // 제공 시 우선 적용(카테고리 조상 ID)
+    "post_id"?: number,            // mode=post 시 필수
+    "time"?: {                     // 하나만 선택
+      "type": "relative" | "absolute" | "month" | "year" | "quarter",
+      // relative
+      "unit"?: "day" | "week" | "month" | "year",
+      "value"?: number,
+      // absolute
+      "from"?: string,             // ISO8601
+      "to"?: string,               // ISO8601
+      // month
+      "month"?: number,            // 1..12, year 없으면 현재 연도 가정
+      "year"?: number,
+      // quarter
+      "quarter"?: number           // 1..4, year 없으면 현재 연도 가정
+    }
+  },
+  "sort": "created_at_desc" | "created_at_asc",
+  "limit": number                  // 1..20
+}
 
-    - 초기 PRICING_TABLE(제공 정책 반영, 단위: per 1K tokens, 통화: USD)
-      - `gpt-5`: { input_per_1k: 0.00125, cached_input_per_1k: 0.000125, output_per_1k: 0.01, currency: 'USD' }
-      - `gpt-5-mini`: { input_per_1k: 0.00025, cached_input_per_1k: 0.000025, output_per_1k: 0.002, currency: 'USD' }
-      - `gpt-5-nano`: { input_per_1k: 0.00005, cached_input_per_1k: 0.000005, output_per_1k: 0.0004, currency: 'USD' }
+규칙(핵심)
+- post_id가 존재하면 mode="post"를 사용하고 filters.post_id를 설정. 그렇지 않으면 mode="rag".
+- category_id가 있으면 filters.category_ids에 포함(단일 ID여도 배열 사용 허용).
+- 가중치 합은 1이 되도록 조정(기본 chunk 0.7, title 0.3). 범위를 넘을 경우 기본값 사용.
+- top_k는 1..10, limit는 1..20, threshold는 0..1 범위로 제한. 미지정 시 기본값 사용.
+- 시간 표현 해석:
+  - “최근/요즘/최근 N개” → relative(단, “N개”는 limit=N으로 반영; 기간은 기본 30일 유지)
+  - “최근 N일/주/달/년” → relative + { unit, value }
+  - “이번 달/이번 주/올해/올해 9월” → month/year/quarter로 구조화
+  - “9월”처럼 연도 미지정 → 현재 연도 가정
+  - “지난주/지난달/작년” → relative 또는 해당 단위 기간으로 구조화
+  - 모호하거나 충돌 시 time 생략(서버 기본 30일 적용 예상)
+- 정렬: “최근/최신/새로운” 등은 created_at_desc. “오래된”은 created_at_asc.
+- 질문에 “N개”가 있으면 limit=N 반영(상한 20).
+- JSON 이외 어떤 텍스트도 출력하지 말 것.
 
-3. [Utils] 비용 계산 유틸 추가
-   - 파일: `src/utils/cost.ts`
-   - 내용:
-     - `getModelPricing(model: string): Pricing | null`
-     - `calcCost(tokens: number, per_1k: number): number` → 반올림 1~4자리(옵션)
-     - 화폐 표기 함수(선택): `formatCost(amount: number, currency: string)`
+시스템 프롬프트 템플릿
+"""
+You are a Search Plan Generator for a Korean blogging platform.
+Your task is to read the user question and output ONLY a JSON object that defines a safe search plan.
 
-4. [Facade] LLM 퍼사드에 비용 로깅 통합
-   - 위치: `src/llm/index.ts` 퍼사드 내부에서 공통 로깅 수행
-   - 기능 흐름(공통):
-     1) 요청 전: 메시지/콘텐츠 토큰 카운트 → `promptTokens`
-        - OpenAI: `countChatMessagesTokens`(토크나이저)
-        - Gemini: `countTokens` API 가능 시 사용(불가 시 근사치)
-     2) 단가 조회: `getModelPricing(model)` → `estInputCost`
-     3) 선로깅: `{type:'llm.request', provider, model, promptTokens, estInputCost, corrId, userId, categoryId, postId}`
-     4) 실제 호출: 등록된 프로바이더(OpenAI Responses 또는 Gemini)로 위임, 스트림은 그대로 중계
-     5) 스트림 종료 후: 출력 텍스트/함수인자 토큰 합산 → `completionTokens`
-     6) 비용 계산: 입력/출력(+cached 입력이 있으면 분리) → `totalCost`
-     7) 후로깅: `{type:'llm.response', provider, model, promptTokens, completionTokens, inputCost, outputCost, totalCost, durationMs, corrId, cachedInputTokens}`
-   - 주의: 기존 SSE 흐름(이벤트명/포맷) 불변 유지. 퍼사드는 원본 델타를 그대로 전달.
-   - 상관관계 ID(`corrId`)는 `uuid` 생성(또는 요청별 식별자 전달 시 사용).
+Context:
+- now_utc: {now_utc}
+- now_kst: {now_kst}
+- timezone: {timezone}
+- user_id: {user_id}
+- category_id: {category_id}
+- post_id: {post_id}
+- defaults: {"top_k":5,"threshold":0.2,"weights":{"chunk":0.7,"title":0.3},"sort":"created_at_desc","limit":5}
 
-5. [Wiring] `qa.service.ts`에서 퍼사드 사용
-   - 기존 직접 호출부를 LLM 퍼사드로 교체(`generate(req)`)
-   - 요청 바디의 `llm` 옵션을 퍼사드에 그대로 전달(provider/model/options)
-   - 출력 토큰 카운트/비용 로깅은 퍼사드 내부에서 처리
+Rules:
+1) Output ONLY a single JSON object matching the schema below. No extra text.
+2) Respect bounds: top_k 1..10, limit 1..20, threshold 0..1, weights in [0,1] and sum to 1.
+3) If post_id exists, use mode="post" and include filters.post_id; else mode="rag".
+4) If category_id exists, include it in filters.category_ids.
+5) Interpret Korean temporal phrases into filters.time using the provided timezone.
+   - “최근/최신/요즘”: prefer sort=created_at_desc. If a concrete period is given (e.g., 최근 30일), use relative.
+   - “이번 달/이번 주/올해/올해 9월”: use month/year/quarter forms.
+   - Month without year (e.g., “9월”): assume current year.
+   - “지난주/지난달/작년”: use the respective period.
+   - If ambiguous, omit time (server applies defaults).
+6) If the question asks for N items (e.g., “N개”), set limit=N within bounds.
+7) Keep the weights to defaults unless a clear need implies otherwise.
 
-6. [옵션] 임베딩 호출 비용 로깅(확장)
-   - 파일: `src/services/embedding.service.ts`
-   - `createEmbeddings` 호출 직전 `input` 텍스트 전체 토큰 수 계산(`countTextTokens` 누적) → 입력 비용 로깅
-   - 임베딩 모델 단가(`text-embedding-3-*`)도 `PRICING_TABLE`에 포함
+Schema:
+{SCHEMA_JSON}
 
-7. [환경변수] 로깅 토글 및 라운딩
-   - `.env` 키 추가(기본값은 off)
-     - `LLM_COST_LOG=true|false` (기본: true로 해도 무방)
-     - `LLM_COST_ROUND=2` (소수점 자리수, 선택)
-   - 로깅은 토글 꺼져 있으면 수행하지 않음
+Question (Korean):
+{question}
 
-8. [로그 포맷] 예시(JSON 라인)
-   - 요청 전: `{ "type": "llm.request", "corrId": "...", "provider": "openai", "model": "gpt-5-mini", "promptTokens": 1234, "estInputCost": 0.00031, "userId": "...", "categoryId": 1, "postId": 42 }`
-   - 응답 후: `{ "type": "llm.response", "corrId": "...", "provider": "openai", "model": "gpt-5-mini", "promptTokens": 1234, "completionTokens": 456, "inputCost": 0.00031, "outputCost": 0.00091, "totalCost": 0.00122, "durationMs": 987, "cachedInputTokens": 0 }`
+Respond with ONLY the JSON object. No markdown, no explanation.
+"""
 
-9. [검증/수용 기준]
-   - `POST /ai/ask` 호출 시 콘솔에 요청 전/후 로그 각각 1회 출력
-   - 모델/프롬프트/토큰 수/예상 비용/총 비용/시간(ms)이 포함되어야 함
-   - 로깅 on/off 토글 동작, 라운딩 반영 확인
-   - 기존 SSE 동작(끊김/지연) 변화 없음
+Few-shot 예시
+- Q: "최근 글 보여줘"
+  출력:
+  {"mode":"rag","top_k":5,"threshold":0.2,"weights":{"chunk":0.7,"title":0.3},"filters":{"user_id":"{user_id}","time":{"type":"relative","unit":"day","value":30}},"sort":"created_at_desc","limit":5}
 
-10. [주의/한계]
-   - 채팅 포맷 오버헤드는 모델별로 상이하며 근사치 사용. 최종 비용은 출력 토큰 카운트까지 반영해 오차 최소화
-   - 스트리밍 API는 서버에서 사용량 메타를 즉시 제공하지 않으므로(비스트리밍과 달리), 응답 텍스트 기반 자체 카운트 수행
-   - 함수 호출(tool_calls) 토큰은 인자 길이에 비례하여 증가. 누적 텍스트/인자 기반으로 동일하게 카운트
-   - Cached Input 과금: 제공 API에서 캐시 히트 토큰 정보를 명시적으로 제공하는 경우에만 `cachedInputTokens`로 분리 산정. 그렇지 않으면 일반 입력으로 계산(보수적)
+- Q: "9월 글 2개"
+  출력:
+  {"mode":"rag","top_k":5,"threshold":0.2,"weights":{"chunk":0.7,"title":0.3},"filters":{"user_id":"{user_id}","time":{"type":"month","month":9}},"sort":"created_at_desc","limit":2}
 
-11. [다음 단계(선택)]
-   - `console.log` → 구조화 로거(Pino/Winston)로 교체, 샘플링·보존 기간 설정
-   - DB 또는 시계열(예: ClickHouse/Prometheus) 적재로 사용자별 비용 대시보드 구성
+- Q: "카테고리 7의 최신 글 3개"
+  출력:
+  {"mode":"rag","top_k":5,"threshold":0.2,"weights":{"chunk":0.7,"title":0.3},"filters":{"user_id":"{user_id}","category_ids":[7]},"sort":"created_at_desc","limit":3}
+
+- Q: "지난주에 쓴 포스트 중 추천해줘"
+  출력:
+  {"mode":"rag","top_k":5,"threshold":0.2,"weights":{"chunk":0.7,"title":0.3},"filters":{"user_id":"{user_id}","time":{"type":"relative","unit":"week","value":1}},"sort":"created_at_desc","limit":5}
+
+- Q: "이 포스트(123) 기준으로 답해줘"
+  출력:
+  {"mode":"post","top_k":5,"threshold":0.2,"weights":{"chunk":0.7,"title":0.3},"filters":{"user_id":"{user_id}","post_id":123},"sort":"created_at_desc","limit":5}
+
+검증 포인트(서버 측)
+- JSON 파싱 실패 → v1 폴백
+- 값 범위 초과 → 기본값/상한으로 교정
+- time 표준화(절대 from/to 변환), 타임존 적용
+- category_ids/post_id 소유권 확인
