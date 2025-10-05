@@ -1,11 +1,11 @@
-import { get_encoding } from '@dqbd/tiktoken';
+import { get_encoding, type TiktokenEncoding } from '@dqbd/tiktoken';
 
-const encodingForModel = (model: string): string => {
-  const lower = (model || '').toLowerCase();
+const encodingForModel = (model?: string): TiktokenEncoding => {
+  const lower = (model ?? '').toLowerCase();
   if (lower.includes('gpt-5') || lower.includes('gpt-4o') || lower.includes('o1') || lower.includes('o3')) {
-    return 'o200k_base';
+    return 'o200k_base' as TiktokenEncoding;
   }
-  return 'cl100k_base';
+  return 'cl100k_base' as TiktokenEncoding;
 };
 
 export const countTextTokens = (text: string, model: string): number => {
