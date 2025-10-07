@@ -66,6 +66,34 @@ export const generateSearchPlan = async (
 
     // Normalize time range to absolute if provided
     let normPlan: SearchPlan = { ...plan, weights };
+
+    const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+    const stopwords = new Set([
+      '글',
+      '포스트',
+      '블로그',
+      '소개',
+      '정리',
+      '내용',
+      '최신',
+      '최근',
+      '정보',
+    ]);
+
+    const cleanList = (arr: string[] | undefined, max: number) => {
+      const uniq = new Set<string>();
+      for (const s of arr || []) {
+        const t = String(s || '').trim();
+        if (!t) continue;
+        if (t.length < 2) continue;
+        if (stopwords.has(t)) continue;
+        const key = t.toLowerCase();
+        if (uniq.has(key)) continue;
+        uniq.add(key);
+      }
+      return Array.from(uniq).slice(0, max);
+    };
     if (plan.filters?.time) {
       const abs = toAbsoluteRangeKst(plan.filters.time as any, now);
       if (abs) {
@@ -84,6 +112,16 @@ export const generateSearchPlan = async (
     normPlan.top_k = Math.min(10, Math.max(1, normPlan.top_k || 5));
     normPlan.limit = Math.min(20, Math.max(1, normPlan.limit || 5));
     normPlan.threshold = Math.min(1, Math.max(0, normPlan.threshold ?? 0.2));
+    const maxRewrites = clamp(plan.hybrid?.max_rewrites ?? 3, 0, 4);
+    const maxKeywords = clamp(plan.hybrid?.max_keywords ?? 6, 0, 8);
+    normPlan.hybrid = {
+      enabled: !!plan.hybrid?.enabled,
+      alpha: clamp(plan.hybrid?.alpha ?? 0.7, 0, 1),
+      max_rewrites: maxRewrites,
+      max_keywords: maxKeywords,
+    } as any;
+    normPlan.rewrites = cleanList(plan.rewrites, maxRewrites) as any;
+    normPlan.keywords = cleanList(plan.keywords, maxKeywords) as any;
     if (!normPlan.mode) normPlan.mode = (ctx.post_id ? 'post' : 'rag') as any;
     if (ctx.category_id && !normPlan.filters.category_ids) normPlan.filters.category_ids = [ctx.category_id];
     if (ctx.post_id) {
@@ -99,4 +137,3 @@ export const generateSearchPlan = async (
     return null;
   }
 };
-

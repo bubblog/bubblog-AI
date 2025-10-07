@@ -18,6 +18,19 @@ export const getSearchPlanSchemaJson = (): Record<string, unknown> => ({
       },
       required: ['chunk', 'title'],
     },
+    rewrites: { type: 'array', items: { type: 'string' } },
+    keywords: { type: 'array', items: { type: 'string' } },
+    hybrid: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        enabled: { type: 'boolean' },
+        alpha: { type: 'number', minimum: 0, maximum: 1 },
+        max_rewrites: { type: 'integer', minimum: 0, maximum: 4 },
+        max_keywords: { type: 'integer', minimum: 0, maximum: 8 },
+      },
+      required: ['enabled', 'alpha', 'max_rewrites', 'max_keywords'],
+    },
     filters: {
       type: 'object',
       additionalProperties: false,
@@ -131,6 +144,9 @@ export const buildSearchPlanPrompt = (params: {
     '5) Interpret Korean temporal phrases into filters.time using the provided timezone. Month without year assumes current year.',
     '6) If the question asks for N items (e.g., “N개”), set limit=N within bounds.',
     '7) Keep weights to defaults unless a clear need implies otherwise.',
+    '8) When helpful for recall, set hybrid.enabled=true and generate concise rewrites (<= max_rewrites) and focused keywords (<= max_keywords).',
+    '9) Avoid stop/common words (예: "글", "포스트", "블로그", "소개", "정리"). Keep within the user context; avoid over-broad topics or time spans.',
+    '10) Remove near-duplicates: if rewrites/keywords are synonymous or highly similar, include only one.',
     '',
     `Schema: ${schemaHint}`,
     '',
@@ -139,4 +155,3 @@ export const buildSearchPlanPrompt = (params: {
     'Respond with ONLY the JSON object. No markdown, no explanation.',
   ].join('\n');
 };
-

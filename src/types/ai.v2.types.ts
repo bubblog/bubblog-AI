@@ -36,6 +36,16 @@ export const planSchema = z.object({
   weights: z
     .object({ chunk: z.number().min(0).max(1), title: z.number().min(0).max(1) })
     .default({ chunk: 0.7, title: 0.3 }),
+  rewrites: z.array(z.string()).default([]),
+  keywords: z.array(z.string()).default([]),
+  hybrid: z
+    .object({
+      enabled: z.boolean().default(false),
+      alpha: z.number().min(0).max(1).default(0.7),
+      max_rewrites: z.number().int().min(0).max(4).default(3),
+      max_keywords: z.number().int().min(0).max(8).default(6),
+    })
+    .default({ enabled: false, alpha: 0.7, max_rewrites: 3, max_keywords: 6 }),
   filters: z
     .object({
       user_id: z.string(),
@@ -76,4 +86,3 @@ export const askV2Schema = z.object({
 });
 
 export type AskV2Request = z.infer<typeof askV2Schema>['body'];
-

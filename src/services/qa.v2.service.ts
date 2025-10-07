@@ -129,13 +129,36 @@ export const answerStreamV2 = async (
           },
         ];
       } else {
-        const plan = planPair.normalized;
+        const plan: any = planPair.normalized;
         stream.write(`event: search_plan\n`);
         stream.write(`data: ${JSON.stringify(plan)}\n\n`);
 
-        // Execute semantic search per plan
-        const rows = await runSemanticSearch(question, userId, plan);
-        // v1과 동일하게: 청크 Top-K를 그대로 사용(포스트 단위 dedupe/limit 미적용)
+        let rows: { postId: string; postTitle: string; postChunk: string; similarityScore: number }[] = [];
+        if (plan.hybrid?.enabled) {
+          if (Array.isArray(plan.rewrites) && plan.rewrites.length > 0) {
+            stream.write(`event: rewrite\n`);
+            stream.write(`data: ${JSON.stringify(plan.rewrites)}\n\n`);
+          }
+          if (Array.isArray(plan.keywords) && plan.keywords.length > 0) {
+            stream.write(`event: keywords\n`);
+            stream.write(`data: ${JSON.stringify(plan.keywords)}\n\n`);
+          }
+          rows = await (await import('./hybrid-search.service')).runHybridSearch(
+            question,
+            userId,
+            plan
+          );
+          const hybridContext = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
+          stream.write(`event: hybrid_result\n`);
+          stream.write(`data: ${JSON.stringify(hybridContext)}\n\n`);
+
+          if (!rows.length) {
+            rows = await runSemanticSearch(question, userId, plan);
+          }
+        } else {
+          rows = await runSemanticSearch(question, userId, plan);
+        }
+
         const context = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
         stream.write(`event: search_result\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);

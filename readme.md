@@ -87,3 +87,45 @@ CREATE INDEX idx_post_title_embeddings_embedding
 ## 4. AI 서버 작동
 
 ### `.env` 파일 작성 (루트 디렉토리 `BUBBLOG_AI`에 위치)
+
+---
+
+## 5. 텍스트 검색 인덱스 (pg_trgm)
+
+하이브리드 검색의 키워드/부분일치 성능 향상을 위해 `pg_trgm` 확장 및 GIN 인덱스를 추가합니다.
+
+### 5.1 확장 및 인덱스 생성 스크립트
+
+프로젝트에 제공된 스크립트를 사용하세요:
+
+`docs/migrations/2025-01-pgtrgm.sql`
+
+내용:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_pc_content_trgm ON post_chunks USING gin (content gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_bp_title_trgm   ON blog_post   USING gin (title   gin_trgm_ops);
+```
+
+### 5.2 적용 방법
+
+- 환경변수 `DATABASE_URL`이 설정된 경우:
+
+```bash
+psql "$DATABASE_URL" -f docs/migrations/2025-01-pgtrgm.sql
+```
+
+- 또는 npm 스크립트 사용:
+
+```bash
+npm run db:migrate:pgtrgm
+```
+
+- 또는 수동 실행(PostgreSQL 쉘 접속 후):
+
+```sql
+\i docs/migrations/2025-01-pgtrgm.sql
+```
+
+주의: 인덱스는 쓰기 비용과 디스크 사용량을 증가시킵니다. 텍스트 검색에 사용하는 컬럼(`post_chunks.content`, `blog_post.title`)에만 생성하세요.

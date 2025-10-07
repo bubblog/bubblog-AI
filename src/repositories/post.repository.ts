@@ -18,6 +18,13 @@ export interface SimilarChunk {
   similarityScore: number;
 }
 
+export interface TextSearchHit {
+  postId: string;
+  postTitle: string;
+  postChunk: string;
+  textScore: number;
+}
+
 // ========= READ QUERIES =========
 export const findPostById = async (postId: number): Promise<Post | null> => {
   const pool = getDb();
@@ -223,5 +230,116 @@ export const findSimilarChunksV2 = async (params: {
     postTitle: row.post_title,
     postChunk: row.post_chunk,
     similarityScore: row.similarity_score,
+  }));
+};
+
+export const textSearchChunksV2 = async (params: {
+  userId: string;
+  query?: string;
+  keywords?: string[];
+  categoryId?: number;
+  from?: string;
+  to?: string;
+  topK?: number;
+  sort?: 'created_at_desc' | 'created_at_asc';
+}): Promise<TextSearchHit[]> => {
+  const pool = getDb();
+  const limit = Math.min(10, Math.max(1, params.topK ?? 5));
+
+  const values: any[] = [];
+  values.push(params.userId);
+
+  const hasCategory = typeof params.categoryId === 'number';
+  const hasTime = !!(params.from && params.to);
+  const hasQuery = !!params.query && params.query.trim().length > 0;
+  const keywords = (params.keywords || []).filter((k) => typeof k === 'string' && k.trim().length > 0);
+
+  const withParts: string[] = [];
+  if (hasCategory) {
+    const catParam = values.length + 1;
+    withParts.push(`
+      category_ids AS (
+        SELECT DISTINCT cc.descendant_id FROM category_closure cc WHERE cc.ancestor_id = $${catParam}
+      ),
+      filtered_posts AS (
+        SELECT bp.id AS post_id, bp.title AS post_title, bp.created_at
+        FROM blog_post bp
+        WHERE bp.user_id = $1 AND bp.category_id IN (SELECT descendant_id FROM category_ids)
+      )`);
+    values.push(params.categoryId);
+  } else {
+    withParts.push(`
+      filtered_posts AS (
+        SELECT id AS post_id, title AS post_title, created_at
+        FROM blog_post
+        WHERE user_id = $1
+      )`);
+  }
+
+  let base = `
+    SELECT
+      fp.post_id,
+      fp.post_title,
+      pc.content AS post_chunk,
+      0::float8 AS content_sim,
+      0::float8 AS title_sim,
+      fp.created_at
+    FROM filtered_posts fp
+    JOIN post_chunks pc ON pc.post_id = fp.post_id
+  `;
+  if (hasQuery) {
+    const qParam = values.length + 1;
+    base = `
+      SELECT
+        fp.post_id,
+        fp.post_title,
+        pc.content AS post_chunk,
+        COALESCE(similarity(pc.content, $${qParam}), 0) AS content_sim,
+        COALESCE(similarity(fp.post_title, $${qParam}), 0) AS title_sim,
+        fp.created_at
+      FROM filtered_posts fp
+      JOIN post_chunks pc ON pc.post_id = fp.post_id
+    `;
+    values.push(params.query);
+  }
+
+  const whereParts: string[] = [];
+  if (hasTime) {
+    const fromParam = values.length + 1;
+    const toParam = values.length + 2;
+    whereParts.push(`fp.created_at BETWEEN $${fromParam} AND $${toParam}`);
+    values.push(params.from, params.to);
+  }
+
+  const likePatterns: string[] = [];
+  for (const k of keywords) {
+    likePatterns.push(`%${k}%`);
+  }
+  if (likePatterns.length > 0) {
+    const arrParam = values.length + 1;
+    whereParts.push(`(pc.content ILIKE ANY($${arrParam}) OR fp.post_title ILIKE ANY($${arrParam}))`);
+    values.push(likePatterns);
+  }
+
+  const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+  let orderBy = 'content_sim DESC';
+  if (params.sort === 'created_at_desc') orderBy = 'content_sim DESC, fp.created_at DESC';
+  if (params.sort === 'created_at_asc') orderBy = 'content_sim DESC, fp.created_at ASC';
+
+  const limitParam = values.length + 1;
+  const sql = `${withParts.length > 0 ? 'WITH ' + withParts.join(',\n') : ''}
+${base}
+${whereSql}
+ORDER BY ${orderBy}
+LIMIT $${limitParam}`;
+  values.push(limit);
+
+  const { rows } = await pool.query(sql, values);
+  return rows.map((row) => ({
+    postId: row.post_id,
+    postTitle: row.post_title,
+    postChunk: row.post_chunk,
+    textScore: Math.max(Number(row.content_sim) || 0, Number(row.title_sim) || 0),
   }));
 };
