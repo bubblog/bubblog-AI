@@ -114,9 +114,16 @@ export const generateSearchPlan = async (
     normPlan.threshold = Math.min(1, Math.max(0, normPlan.threshold ?? 0.2));
     const maxRewrites = clamp(plan.hybrid?.max_rewrites ?? 3, 0, 4);
     const maxKeywords = clamp(plan.hybrid?.max_keywords ?? 6, 0, 8);
+
+    // Map retrieval_bias -> alpha (fallback to provided alpha or default)
+    const bias = (plan.hybrid as any)?.retrieval_bias || 'balanced';
+    const biasAlpha = bias === 'lexical' ? 0.3 : bias === 'semantic' ? 0.75 : 0.5;
+    const alpha = clamp(((plan.hybrid as any)?.alpha ?? biasAlpha) as number, 0, 1);
+
     normPlan.hybrid = {
       enabled: !!plan.hybrid?.enabled,
-      alpha: clamp(plan.hybrid?.alpha ?? 0.7, 0, 1),
+      retrieval_bias: bias,
+      alpha,
       max_rewrites: maxRewrites,
       max_keywords: maxKeywords,
     } as any;

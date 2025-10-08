@@ -79,40 +79,58 @@
 
 ### POST `/ai/v2/ask` (SSE)
 - 인증: 필요 (`Authorization: Bearer <JWT>`)
-- 요청 Body (v1과 동일 스키마)
+- 요청 Body
   - `question`(string, required)
   - `user_id`(string, required)
   - `category_id`(number, optional)
   - `post_id`(number, optional)
   - `speech_tone`(number, optional)
+    - `-1`: 기본 말투(간결/명확)
+    - `-2`: 해당 글(post 모드) 말투 모사
+    - 양수: 페르소나 ID(해당 유저의 등록 페르소나)
   - `llm`(object, optional)
-- v2의 추가/변경 사항
-  - 검색 계획 수립과 결과를 사전 이벤트로 투명하게 송신합니다.
-  - `post_id` 지정 시에도 동일한 형태의 사전 이벤트를 간략히 제공합니다.
+    - `provider`: `openai` | `gemini`
+    - `model`: string (미지정 시 서버 기본값 사용)
+    - `options`: `{ temperature?: number, top_p?: number, max_output_tokens?: number }`
+- 동작 개요
+  - 서버가 질문을 토대로 “검색 계획(JSON)”을 생성·검증·정규화한 뒤, 계획에 따라 시맨틱/하이브리드 검색을 수행하고 결과를 SSE로 스트리밍합니다.
+  - `post_id`가 있으면 post 모드(단일 글 컨텍스트)로 처리하며, 간략한 `search_plan`/`search_result` 이벤트 후 본문 기반 답변을 스트리밍합니다.
+- 하이브리드 검색(벡터+텍스트)
+  - 계획에 `hybrid.enabled: true`인 경우 활성화됩니다.
+  - `rewrites`(재작성 질의)와 `keywords`(핵심 키워드)를 생성하여 벡터/텍스트 두 경로로 후보를 수집하고, `alpha` 가중으로 점수를 융합해 상위 `top_k`를 선택합니다.
+  - SSE로 `rewrite`, `keywords`, `hybrid_result` 이벤트가 순차 송신됩니다. 하이브리드 결과가 없으면 시맨틱 검색으로 폴백합니다.
 - SSE 이벤트 순서(일반적인 흐름)
-  1) `search_plan`: 검색 계획 정보
-     - 예시 데이터(정규화된 계획):
+  1) `search_plan`: 정규화된 검색 계획(JSON)
+     - 예시 데이터(정규화):
        ```json
        {
-         "mode": "rag" | "post",
+         "mode": "rag",
          "top_k": 5,
          "threshold": 0.2,
          "weights": { "chunk": 0.7, "title": 0.3 },
-         "filters": { "user_id": "u_123", "category_ids": [1], "post_id": 10?, "time": {...}? },
+         "filters": {
+           "user_id": "u_123",
+           "category_ids": [3],
+           "time": { "type": "absolute", "from": "2025-09-01T00:00:00.000Z", "to": "2025-09-30T23:59:59.999Z" }
+         },
          "sort": "created_at_desc",
-         "limit": 5
+         "limit": 5,
+         "hybrid": { "enabled": true, "alpha": 0.7, "max_rewrites": 3, "max_keywords": 6 },
+         "rewrites": ["프로젝트 X 요약", "프로젝트 X 핵심"],
+         "keywords": ["프로젝트 X", "핵심", "요약"]
        }
        ```
-       - `time` 필터는 `relative|absolute|month|year|quarter` 타입을 지원하며, 값은 ISO8601 또는 숫자 조합입니다.
-  2) (하이브리드 사용 시) `rewrite`: `["재작성 질의", ...]`
-  3) (하이브리드 사용 시) `keywords`: `["핵심 키워드", ...]`
-  4) (하이브리드 사용 시) `hybrid_result`: `[ { postId, postTitle }, ... ]` — 융합 기준 상위 결과 요약
-  5) `search_result`: `[ { postId, postTitle }, ... ]` — 최종 컨텍스트 요약
+       - 비고: 카테고리는 단일 값만 지원하며 서버는 첫 번째 항목만 사용합니다.
+       - post 모드에서는 간략한 형태(`{ mode: "post", filters: { post_id, user_id } }`)가 송신될 수 있습니다.
+  2) (하이브리드 사용 시) `rewrite`: `string[]`
+  3) (하이브리드 사용 시) `keywords`: `string[]`
+  4) (하이브리드 사용 시) `hybrid_result`: `[ { postId, postTitle }, ... ]`
+  5) `search_result`: `[ { postId, postTitle }, ... ]` — 최종 컨텍스트 요약(하이브리드 또는 시맨틱)
   6) `exist_in_post_status`: `true|false`
-  7) `context`: `[ { postId, postTitle }, ... ]` — 모델 프롬프트에 사용되는 컨텍스트 요약
-  8) `answer` 스트리밍(여러 번)
-  9) `end` with `data: [DONE]`
-  - 오류 시 `error`: `{ code?, message }`
+  7) `context`: `[ { postId, postTitle }, ... ]`
+  8) `answer` — 모델 부분 응답(여러 번)
+  9) `end` — `data: [DONE]`
+  - 오류 시 `error`: `{ code?: number, message: string }`
 
 - 예시(curl)
   ```bash
@@ -124,7 +142,7 @@
       "question": "최근 한 달 블로그에서 프로젝트 X 관련 내용 요약",
       "user_id": "u_123",
       "category_id": 3,
-      "llm": { "provider": "openai", "options": { "temperature": 0.2 } }
+      "llm": { "provider": "openai", "model": "gpt-5-mini", "options": { "temperature": 0.2, "top_p": 0.9, "max_output_tokens": 800 } }
     }'
   ```
 

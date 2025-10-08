@@ -41,11 +41,13 @@ export const planSchema = z.object({
   hybrid: z
     .object({
       enabled: z.boolean().default(false),
-      alpha: z.number().min(0).max(1).default(0.7),
+      // LLM outputs retrieval_bias label; server maps to alpha
+      retrieval_bias: z.enum(['lexical', 'balanced', 'semantic']).default('balanced'),
+      alpha: z.number().min(0).max(1).optional(),
       max_rewrites: z.number().int().min(0).max(4).default(3),
       max_keywords: z.number().int().min(0).max(8).default(6),
     })
-    .default({ enabled: false, alpha: 0.7, max_rewrites: 3, max_keywords: 6 }),
+    .default({ enabled: false, retrieval_bias: 'balanced', max_rewrites: 3, max_keywords: 6 }),
   filters: z
     .object({
       user_id: z.string(),
