@@ -97,7 +97,9 @@
   - `post_id`가 있으면 post 모드(단일 글 컨텍스트)로 처리하며, 간략한 `search_plan`/`search_result` 이벤트 후 본문 기반 답변을 스트리밍합니다.
 - 하이브리드 검색(벡터+텍스트)
   - 계획에 `hybrid.enabled: true`인 경우 활성화됩니다.
-  - `rewrites`(재작성 질의)와 `keywords`(핵심 키워드)를 생성하여 벡터/텍스트 두 경로로 후보를 수집하고, `alpha` 가중으로 점수를 융합해 상위 `top_k`를 선택합니다.
+  - `rewrites`(재작성 질의)와 `keywords`(핵심 키워드)를 생성하여 벡터/텍스트 두 경로로 후보를 수집하고, `hybrid.retrieval_bias` 라벨을 서버가 `alpha` 값으로 매핑해 점수를 융합하여 상위 `top_k`를 선택합니다.
+    - 매핑(기본): `lexical → 0.3`, `balanced → 0.5`, `semantic → 0.75`
+    - 정규화/결합식: `score = alpha*vec + (1-alpha)*text` (min-max 정규화 후)
   - SSE로 `rewrite`, `keywords`, `hybrid_result` 이벤트가 순차 송신됩니다. 하이브리드 결과가 없으면 시맨틱 검색으로 폴백합니다.
 - SSE 이벤트 순서(일반적인 흐름)
   1) `search_plan`: 정규화된 검색 계획(JSON)
@@ -115,12 +117,14 @@
          },
          "sort": "created_at_desc",
          "limit": 5,
-         "hybrid": { "enabled": true, "alpha": 0.7, "max_rewrites": 3, "max_keywords": 6 },
+         "hybrid": { "enabled": true, "retrieval_bias": "balanced", "alpha": 0.5, "max_rewrites": 3, "max_keywords": 6 },
          "rewrites": ["프로젝트 X 요약", "프로젝트 X 핵심"],
          "keywords": ["프로젝트 X", "핵심", "요약"]
        }
        ```
-       - 비고: 카테고리는 단일 값만 지원하며 서버는 첫 번째 항목만 사용합니다.
+       - 비고:
+         - `hybrid.retrieval_bias`는 LLM이 결정하는 라벨이며, 서버는 이를 `alpha`로 변환해 사용합니다.
+         - 카테고리는 단일 값만 지원하며 서버는 첫 번째 항목만 사용합니다.
        - post 모드에서는 간략한 형태(`{ mode: "post", filters: { post_id, user_id } }`)가 송신될 수 있습니다.
   2) (하이브리드 사용 시) `rewrite`: `string[]`
   3) (하이브리드 사용 시) `keywords`: `string[]`
