@@ -29,11 +29,26 @@ export interface TextSearchHit {
 // ========= READ QUERIES =========
 export const findPostById = async (postId: number): Promise<Post | null> => {
   const pool = getDb();
-  const { rows } = await pool.query<Post>(
-    'SELECT id, title, content, tags, created_at, user_id, is_public FROM blog_post WHERE id = $1',
+  // Some databases may not have a `tags` column on blog_post.
+  // Select existing columns and populate `tags` as an empty array fallback.
+  const { rows } = await pool.query(
+    'SELECT id, title, content, created_at, user_id, is_public FROM blog_post WHERE id = $1',
     [postId]
   );
-  return rows.length > 0 ? rows[0] : null;
+  if (rows.length === 0) return null;
+
+  const row = rows[0] as any;
+  const post: Post = {
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    // Fallback: DB has no tags column; keep empty list so prompts render gracefully
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    created_at: row.created_at,
+    user_id: row.user_id,
+    is_public: row.is_public,
+  };
+  return post;
 };
 
 export const findSimilarChunks = async (
