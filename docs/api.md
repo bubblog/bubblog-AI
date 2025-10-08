@@ -93,14 +93,14 @@
     - `model`: string (미지정 시 서버 기본값 사용)
     - `options`: `{ temperature?: number, top_p?: number, max_output_tokens?: number }`
 - 동작 개요
-  - 서버가 질문을 토대로 “검색 계획(JSON)”을 생성·검증·정규화한 뒤, 계획에 따라 시맨틱/하이브리드 검색을 수행하고 결과를 SSE로 스트리밍합니다.
+  - 서버가 질문을 토대로 “검색 계획(JSON)”을 생성·검증·정규화한 뒤, 계획에 따라 시맨틱 또는 하이브리드 검색을 수행하고 결과를 SSE로 스트리밍합니다.
   - `post_id`가 있으면 post 모드(단일 글 컨텍스트)로 처리하며, 간략한 `search_plan`/`search_result` 이벤트 후 본문 기반 답변을 스트리밍합니다.
 - 하이브리드 검색(벡터+텍스트)
   - 계획에 `hybrid.enabled: true`인 경우 활성화됩니다.
   - `rewrites`(재작성 질의)와 `keywords`(핵심 키워드)를 생성하여 벡터/텍스트 두 경로로 후보를 수집하고, `hybrid.retrieval_bias` 라벨을 서버가 `alpha` 값으로 매핑해 점수를 융합하여 상위 `top_k`를 선택합니다.
     - 매핑(기본): `lexical → 0.3`, `balanced → 0.5`, `semantic → 0.75`
-    - 정규화/결합식: `score = alpha*vec + (1-alpha)*text` (min-max 정규화 후)
-  - SSE로 `rewrite`, `keywords`, `hybrid_result` 이벤트가 순차 송신됩니다. 하이브리드 결과가 없으면 시맨틱 검색으로 폴백합니다.
+    - 결합식: `score = alpha*vec + (1-alpha)*text` (각 경로 점수 min-max 정규화 후)
+  - SSE로 `rewrite`, `keywords`, `hybrid_result` 이벤트가 필요한 경우에만 송신됩니다. 하이브리드 결과가 없으면 시맨틱 검색으로 폴백합니다.
 - SSE 이벤트 순서(일반적인 흐름)
   1) `search_plan`: 정규화된 검색 계획(JSON)
      - 예시 데이터(정규화):
@@ -111,8 +111,6 @@
          "threshold": 0.2,
          "weights": { "chunk": 0.7, "title": 0.3 },
          "filters": {
-           "user_id": "u_123",
-           "category_ids": [3],
            "time": { "type": "absolute", "from": "2025-09-01T00:00:00.000Z", "to": "2025-09-30T23:59:59.999Z" }
          },
          "sort": "created_at_desc",
@@ -123,9 +121,9 @@
        }
        ```
        - 비고:
-         - `hybrid.retrieval_bias`는 LLM이 결정하는 라벨이며, 서버는 이를 `alpha`로 변환해 사용합니다.
-         - 카테고리는 단일 값만 지원하며 서버는 첫 번째 항목만 사용합니다.
-       - post 모드에서는 간략한 형태(`{ mode: "post", filters: { post_id, user_id } }`)가 송신될 수 있습니다.
+         - `filters.time`만 포함됩니다. `user_id`/`category_id`/`post_id` 등은 서버가 검색 시 내부적으로 적용합니다.
+         - `hybrid.retrieval_bias`는 LLM 라벨이며 서버가 `alpha`로 변환해 사용합니다.
+       - post 모드에서는 간략한 형태 예: `{ "mode": "post", "filters": { "post_id": 123, "user_id": "u_123" } }`.
   2) (하이브리드 사용 시) `rewrite`: `string[]`
   3) (하이브리드 사용 시) `keywords`: `string[]`
   4) (하이브리드 사용 시) `hybrid_result`: `[ { postId, postTitle }, ... ]`
@@ -135,6 +133,8 @@
   8) `answer` — 모델 부분 응답(여러 번)
   9) `end` — `data: [DONE]`
   - 오류 시 `error`: `{ code?: number, message: string }`
+- 폴백 동작
+  - 플래너 실패 시 `search_plan`으로 `{ "mode": "rag", "fallback": true }`가 송신되며, v1 스타일 RAG로 컨텍스트를 구성합니다.
 
 - 예시(curl)
   ```bash

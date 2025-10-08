@@ -40,7 +40,7 @@ export const generateSearchPlan = async (
         JSON.stringify(
           {
             type: 'debug.plan.prompt',
-            model: config.CHAT_MODEL || 'gpt-5-mini',
+            model: 'gpt-5-mini',
             prompt_len: prompt.length,
             head: prompt.slice(0, 600),
             tail: prompt.slice(Math.max(0, prompt.length - 600)),
@@ -52,9 +52,10 @@ export const generateSearchPlan = async (
     } catch {}
 
     const response: any = await (openai as any).responses.create({
-      model: config.CHAT_MODEL || 'gpt-5-mini',
+      model: 'gpt-5-mini',
       input: prompt,
       text: { format: { type: 'json_schema', name: 'SearchPlan', schema: getSearchPlanSchemaJson()} },
+      reasoning: { effort: 'minimal' },
       max_output_tokens: 1500,
     });
 

@@ -123,6 +123,14 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
             safeWrite(`data: ${JSON.stringify(argsDelta)}\n\n`);
           }
         });
+        // Also handle non-delta tool_call events
+        responsesStream.on('response.tool_call', (ev: any) => {
+          const args = ev?.arguments || ev?.arguments_delta || '';
+          if (args) {
+            safeWrite(`event: answer\n`);
+            safeWrite(`data: ${JSON.stringify(args)}\n\n`);
+          }
+        });
 
         // Catch-all messages to ensure we don't miss alternative text events
         responsesStream.on('message', (msg: any) => {
@@ -238,17 +246,31 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
 
     // Chat Completions streaming as universal fallback
     try { console.log(JSON.stringify({ type: 'debug.openai.path', path: 'chat.completions.stream' })); } catch {}
-    const chatStream = await openai.chat.completions.create({
-      model,
-      messages: messages as any,
-      tools: (req.tools as OpenAI.Chat.Completions.ChatCompletionTool[]) || undefined,
-      tool_choice: req.tools && req.tools.length > 0 ? 'auto' : undefined,
-      stream: true,
-      temperature: req.options?.temperature,
-      top_p: req.options?.top_p,
-      max_tokens: req.options?.max_output_tokens as any,
-    });
+    let chatStream: any;
 
+    // temperature/top_p are not supported on reasoning models (e.g., GPT-5 family)
+    if (!isGpt5Family) {
+      chatStream = await openai.chat.completions.create({
+        model,
+        messages: messages as any,
+        tools: (req.tools as OpenAI.Chat.Completions.ChatCompletionTool[]) || undefined,
+        tool_choice: req.tools && req.tools.length > 0 ? 'auto' : undefined,
+        stream: true,
+        temperature: req.options?.temperature,
+        top_p: req.options?.top_p,
+        max_tokens: req.options?.max_output_tokens as any,
+      });
+    } else {
+      chatStream = await openai.chat.completions.create({
+        model,
+        messages: messages as any,
+        tools: (req.tools as OpenAI.Chat.Completions.ChatCompletionTool[]) || undefined,
+        tool_choice: req.tools && req.tools.length > 0 ? 'auto' : undefined,
+        stream: true,
+        max_tokens: req.options?.max_output_tokens as any,
+      });
+    }
+    
     // Iterate asynchronously; return stream immediately to allow real-time consumption
     (async () => {
       try {

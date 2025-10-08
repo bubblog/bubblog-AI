@@ -113,26 +113,30 @@ export const answerStreamV2 = async (
         messages = toSimpleMessages(
           qaPrompts.createRagPrompt(question, similarChunks, speechTonePrompt)
         );
-        tools = [
-          {
-            type: 'function',
-            function: {
-              name: 'report_content_insufficient',
-              description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
-              parameters: {
-                type: 'object',
-                properties: {
-                  text: {
-                    type: 'string',
-                    description:
-                      '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
+        if (similarChunks.length === 0) {
+          tools = undefined;
+        } else {
+          tools = [
+            {
+              type: 'function',
+              function: {
+                name: 'report_content_insufficient',
+                description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    text: {
+                      type: 'string',
+                      description:
+                        '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
+                    },
                   },
+                  required: ['text'],
                 },
-                required: ['text'],
               },
             },
-          },
-        ];
+          ];
+        }
       } else {
         const plan: any = planPair.normalized;
         stream.write(`event: search_plan\n`);
@@ -210,26 +214,31 @@ export const answerStreamV2 = async (
             speechTonePrompt
           )
         );
-        tools = [
-          {
-            type: 'function',
-            function: {
-              name: 'report_content_insufficient',
-              description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
-              parameters: {
-                type: 'object',
-                properties: {
-                  text: {
-                    type: 'string',
-                    description:
-                      '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
+        // If no context was found, avoid tool-calls to force direct natural-language guidance
+        if (rows.length === 0) {
+          tools = undefined;
+        } else {
+          tools = [
+            {
+              type: 'function',
+              function: {
+                name: 'report_content_insufficient',
+                description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    text: {
+                      type: 'string',
+                      description:
+                        '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
+                    },
                   },
+                  required: ['text'],
                 },
-                required: ['text'],
               },
             },
-          },
-        ];
+          ];
+        }
       }
     }
 
