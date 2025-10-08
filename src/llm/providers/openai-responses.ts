@@ -101,17 +101,17 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
         } catch {}
         const responsesStream: any = await (openai as any).responses.stream(respParams);
 
-        let loggedFirstDelta = false;
+        // let loggedFirstDelta = false;
         responsesStream.on('response.output_text.delta', (ev: any) => {
           const text = typeof ev === 'string' ? ev : ev?.delta ?? '';
           if (text) {
             safeWrite(`event: answer\n`);
             safeWrite(`data: ${JSON.stringify(text)}\n\n`);
-            try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length, at: Date.now() })); } catch {}
-            if (!loggedFirstDelta) {
-              try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length })); } catch {}
-              loggedFirstDelta = true;
-            }
+            // try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length, at: Date.now() })); } catch {}
+            // if (!loggedFirstDelta) {
+              // try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length })); } catch {}
+              // loggedFirstDelta = true;
+            // }
           }
         });
 

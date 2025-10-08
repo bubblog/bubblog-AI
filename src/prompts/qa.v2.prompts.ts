@@ -31,73 +31,28 @@ export const getSearchPlanSchemaJson = (): Record<string, unknown> => ({
       },
       required: ['enabled', 'retrieval_bias', 'max_rewrites', 'max_keywords'],
     },
+    // Only time is allowed under filters. Responses JSON Schema requires closed objects
+    // with explicit required fields at each level. We constrain time to label-form only.
     filters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        user_id: { type: 'string' },
-        category_ids: { type: 'array', items: { type: 'integer' } },
-        post_id: { type: 'integer' },
         time: {
-          oneOf: [
-            {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { const: 'relative' },
-                unit: { enum: ['day', 'week', 'month', 'year'] },
-                value: { type: 'integer', minimum: 1 },
-              },
-              required: ['type', 'unit', 'value'],
-            },
-            {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { const: 'absolute' },
-                from: { type: 'string' },
-                to: { type: 'string' },
-              },
-              required: ['type', 'from', 'to'],
-            },
-            {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { const: 'month' },
-                month: { type: 'integer', minimum: 1, maximum: 12 },
-                year: { type: 'integer' },
-              },
-              required: ['type', 'month'],
-            },
-            {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { const: 'year' },
-                year: { type: 'integer' },
-              },
-              required: ['type', 'year'],
-            },
-            {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { const: 'quarter' },
-                quarter: { type: 'integer', minimum: 1, maximum: 4 },
-                year: { type: 'integer' },
-              },
-              required: ['type', 'quarter'],
-            },
-          ],
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            type: { type: 'string', enum: ['label'] },
+            label: { type: 'string', minLength: 1 },
+          },
+          required: ['type', 'label'],
         },
       },
-      required: ['user_id'],
+      required: ['time'],
     },
     sort: { enum: ['created_at_desc', 'created_at_asc'] },
     limit: { type: 'integer', minimum: 1, maximum: 20 },
   },
-  required: ['mode', 'top_k', 'threshold', 'weights', 'filters', 'sort', 'limit'],
+  required: ['mode', 'top_k', 'threshold', 'weights', 'rewrites', 'keywords', 'hybrid', 'filters', 'sort', 'limit'],
 });
 
 export const buildSearchPlanPrompt = (params: {
@@ -117,8 +72,6 @@ export const buildSearchPlanPrompt = (params: {
       weights: { chunk: 0.7, title: 0.3 },
       sort: 'created_at_desc',
       limit: 5,
-      mode: 'rag',
-      filters: { user_id: params.user_id },
     },
   );
 
@@ -134,20 +87,20 @@ export const buildSearchPlanPrompt = (params: {
     `user_id: ${params.user_id}`,
     `category_id: ${params.category_id ?? ''}`,
     `post_id: ${params.post_id ?? ''}`,
-    `defaults: ${defaults}`,
     '',
     'Rules:',
     '1) Output ONLY a single JSON object matching the schema. No extra text.',
-    '2) Respect bounds: top_k 1..10, limit 1..20, threshold 0..1, weights in [0,1] and sum to 1.',
-    '3) Server-provided filters are FIXED constraints. Do NOT change or omit them:',
-    '   - Always keep filters.user_id as provided (unchanged).',
-    '   - If category_id exists, include ONLY that id in filters.category_ids (no additions/removals).',
-    '   - If post_id exists, include exactly that as filters.post_id (no substitutions).',
-    '   - Your job is to decide top_k, threshold, filters.time, sort, and limit only; do NOT invent other filters.',
+    '2) Respect bounds: top_k 1..10, limit 1..20, threshold 0..1, weights in [0,1]. The server normalizes their sum.',
+    '3) Do NOT output any filters other than filters.time. The server injects user_id/category_id/post_id.',
+    '   - Your job: decide top_k, threshold, sort, limit; and optionally rewrites/keywords/hybrid only.',
     '4) Mode must follow constraints: if post_id exists, use mode="post"; otherwise use mode="rag".',
-    '5) Interpret Korean temporal phrases into filters.time using the provided timezone. Month without year assumes current year.',
-    '6) If the question asks for N items (e.g., “N개”), set limit=N within bounds.',
-    '7) Keep weights to defaults unless a clear need implies otherwise.',
+    '5) Time MUST be provided via a label only: filters.time = { "type": "label", "label": "..." }',
+    '   - Allowed labels (examples): "all_time"(no filter), "today", "yesterday", "last_7_days", "last_14_days", "last_30_days", "this_month", "last_month",',
+    '     or structured: "2006_to_now", "2019-2022", "2024-Q3", "Q3-2024", "2024-09", "2024".',
+    '   - For queries like "최근 글", prefer a short window label such as "last_7_days" or "last_30_days" (choose appropriately).',
+    '6) Do NOT include any temporal words or ranges inside rewrites/keywords. Temporal intent must live ONLY in filters.time.',
+    '7) If the question asks for N items (e.g., “N개”), set limit=N within bounds.',
+    '8) Keep weights to defaults unless a clear need implies otherwise.',
     '8) When helpful for recall, set hybrid.enabled=true and choose hybrid.retrieval_bias ∈ {lexical, balanced, semantic}. Then generate concise rewrites (<= max_rewrites) and focused keywords (<= max_keywords).',
     '   - lexical: keyword/정확 매칭이 중요할 때 (숫자, 버전, 고유명사 등).',
     '   - balanced: 일반 질의.',

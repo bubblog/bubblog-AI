@@ -137,6 +137,32 @@ export const answerStreamV2 = async (
         const plan: any = planPair.normalized;
         stream.write(`event: search_plan\n`);
         stream.write(`data: ${JSON.stringify(plan)}\n\n`);
+        // Console debug for emitted search plan
+        try {
+          console.log(
+            JSON.stringify(
+              {
+                type: 'debug.sse.search_plan',
+                userId,
+                categoryId,
+                plan_summary: {
+                  mode: plan.mode,
+                  top_k: plan.top_k,
+                  threshold: plan.threshold,
+                  weights: plan.weights,
+                  sort: plan.sort,
+                  limit: plan.limit,
+                  hybrid: plan.hybrid,
+                  time: plan?.filters?.time || null,
+                  rewrites_len: Array.isArray(plan.rewrites) ? plan.rewrites.length : 0,
+                  keywords_len: Array.isArray(plan.keywords) ? plan.keywords.length : 0,
+                },
+              },
+              null,
+              0,
+            ),
+          );
+        } catch {}
 
         let rows: { postId: string; postTitle: string; postChunk: string; similarityScore: number }[] = [];
         if (plan.hybrid?.enabled) {

@@ -2,31 +2,49 @@ import { z } from 'zod';
 
 // ===== Plan JSON Schema (Zod) =====
 
+// Time filter schema: support multiple shapes to reduce LLM fragility
 export const timeFilterSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('relative'),
-    unit: z.enum(['day', 'week', 'month', 'year']),
-    value: z.number().int().positive(),
-  }),
-  z.object({
-    type: z.literal('absolute'),
-    from: z.string(), // ISO8601
-    to: z.string(),   // ISO8601
-  }),
-  z.object({
-    type: z.literal('month'),
-    month: z.number().int().min(1).max(12),
-    year: z.number().int().optional(),
-  }),
-  z.object({
-    type: z.literal('year'),
-    year: z.number().int(),
-  }),
-  z.object({
-    type: z.literal('quarter'),
-    quarter: z.number().int().min(1).max(4),
-    year: z.number().int().optional(),
-  }),
+  // Absolute ISO range
+  z
+    .object({ type: z.literal('absolute'), from: z.string(), to: z.string() })
+    .strict(),
+  // Relative window: N units up to today (KST)
+  z
+    .object({
+      type: z.literal('relative'),
+      unit: z.enum(['day', 'week', 'month', 'year']),
+      value: z.number().int().min(1).max(365),
+    })
+    .strict(),
+  // Month of a year (default year=now)
+  z
+    .object({ type: z.literal('month'), year: z.number().int().optional(), month: z.number().int().min(1).max(12) })
+    .strict(),
+  // Quarter of a year (default year=now)
+  z
+    .object({ type: z.literal('quarter'), year: z.number().int().optional(), quarter: z.number().int().min(1).max(4) })
+    .strict(),
+  // Single year
+  z.object({ type: z.literal('year'), year: z.number().int() }).strict(),
+  // Named presets (limited set)
+  z
+    .object({
+      type: z.literal('named'),
+      preset: z.enum([
+        'all_time',
+        'all',
+        'today',
+        'yesterday',
+        'last_7_days',
+        'last_14_days',
+        'last_30_days',
+        'this_month',
+        'last_month',
+      ]),
+    })
+    .strict(),
+  // Free-form label, e.g., "2006_to_now", "2024-Q3", "2019-2022", "2024-09"
+  z.object({ type: z.literal('label'), label: z.string().min(1) }).strict(),
 ]);
 
 export const planSchema = z.object({
@@ -50,12 +68,10 @@ export const planSchema = z.object({
     .default({ enabled: false, retrieval_bias: 'balanced', max_rewrites: 3, max_keywords: 6 }),
   filters: z
     .object({
-      user_id: z.string(),
-      category_ids: z.array(z.number().int()).optional(),
-      post_id: z.number().int().optional(),
       time: timeFilterSchema.optional(),
     })
-    .default({ user_id: '' }),
+    .strict()
+    .optional(),
   sort: z.enum(['created_at_desc', 'created_at_asc']).default('created_at_desc'),
   limit: z.number().int().min(1).max(20).default(5),
 });
