@@ -6,6 +6,8 @@ import * as postRepository from '../repositories/post.repository';
 import * as personaRepository from '../repositories/persona.repository';
 import { generateSearchPlan } from './search-plan.service';
 import { runSemanticSearch } from './semantic-search.service';
+import { runHybridSearch } from './hybrid-search.service';
+import { createEmbeddings } from './embedding.service';
 
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -61,10 +63,15 @@ export const answerStreamV2 = async (
     if (postId) {
       // Post-centric path (same as v1 with added v2 pre-events)
       const post = await postRepository.findPostById(postId);
-      if (!post || post.user_id !== userId) {
-        const code = !post ? 404 : 403;
+      if (!post) {
         stream.write(`event: error\n`);
-        stream.write(`data: ${JSON.stringify({ code, message: !post ? 'Post not found' : 'Forbidden' })}\n\n`);
+        stream.write(`data: ${JSON.stringify({ code: 404, message: 'Post not found' })}\n\n`);
+        stream.end();
+        return;
+      }
+      if (!post.is_public && post.user_id !== userId) {
+        stream.write(`event: error\n`);
+        stream.write(`data: ${JSON.stringify({ code: 403, message: 'Forbidden' })}\n\n`);
         stream.end();
         return;
       }
@@ -91,9 +98,7 @@ export const answerStreamV2 = async (
       const planPair = await generateSearchPlan(question, { user_id: userId, category_id: categoryId });
       if (!planPair) {
         // Fallback to v1 RAG silently
-        const [questionEmbedding] = await (await import('./embedding.service')).createEmbeddings([
-          question,
-        ]);
+        const [questionEmbedding] = await createEmbeddings([question]);
         const similarChunks = await postRepository.findSimilarChunks(userId, questionEmbedding, categoryId);
         const context = similarChunks.map((c) => ({ postId: c.postId, postTitle: c.postTitle }));
         stream.write(`event: search_plan\n`);
@@ -143,7 +148,7 @@ export const answerStreamV2 = async (
             stream.write(`event: keywords\n`);
             stream.write(`data: ${JSON.stringify(plan.keywords)}\n\n`);
           }
-          rows = await (await import('./hybrid-search.service')).runHybridSearch(
+          rows = await runHybridSearch(
             question,
             userId,
             plan

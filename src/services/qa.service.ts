@@ -72,12 +72,14 @@ export const answerStream = async (
         try { console.warn(JSON.stringify({ type: 'debug.qa.post', status: 'not_found', postId })); } catch {}
         return;
       }
-
-      if (post.user_id !== userId) {
-         stream.write(`event: error\ndata: ${JSON.stringify({ code: 403, message: 'Forbidden' })}\n\n`);
-         stream.end();
-         try { console.warn(JSON.stringify({ type: 'debug.qa.post', status: 'forbidden', postId })); } catch {}
-         return;
+      
+      // Enforce conditional ownership: if post is not public, require owner
+      if (!post.is_public && post.user_id !== userId) {
+        stream.write(`event: error\n`);
+        stream.write(`data: ${JSON.stringify({ code: 403, message: 'Forbidden' })}\n\n`);
+        stream.end();
+        try { console.warn(JSON.stringify({ type: 'debug.qa.post', status: 'forbidden', postId })); } catch {}
+        return;
       }
 
       const processedContent = preprocessContent(post.content);

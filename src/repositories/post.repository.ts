@@ -9,6 +9,7 @@ export interface Post {
   tags: string[];
   created_at: string;
   user_id: string;
+  is_public:boolean;
 }
 
 export interface SimilarChunk {
@@ -29,7 +30,7 @@ export interface TextSearchHit {
 export const findPostById = async (postId: number): Promise<Post | null> => {
   const pool = getDb();
   const { rows } = await pool.query<Post>(
-    'SELECT id, title, content, tags, created_at, user_id FROM blog_post WHERE id = $1',
+    'SELECT id, title, content, tags, created_at, user_id, is_public FROM blog_post WHERE id = $1',
     [postId]
   );
   return rows.length > 0 ? rows[0] : null;
