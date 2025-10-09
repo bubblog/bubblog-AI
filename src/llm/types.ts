@@ -23,6 +23,9 @@ export type GenerateRequest = {
     temperature?: number;
     top_p?: number;
     max_output_tokens?: number;
+    // GPT-5 family specific controls
+    reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
+    text_verbosity?: 'low' | 'medium' | 'high';
   };
   meta?: {
     userId?: string;
@@ -30,4 +33,3 @@ export type GenerateRequest = {
     postId?: number;
   };
 };
-

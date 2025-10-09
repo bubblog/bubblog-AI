@@ -12,6 +12,7 @@ const configSchema = z.object({
   TOKEN_AUDIENCE: z.string().default('bubblog'),
   ALGORITHM: z.string().default('HS256'),
   EMBED_MODEL: z.string().default('text-embedding-3-small'),
+  // 기본 LLM 모델: GPT-5 계열
   CHAT_MODEL: z.string().default('gpt-5-mini'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_CHAT_MODEL: z.string().default('gemini-2.5-flash'),
