@@ -49,14 +49,48 @@ export const askHandler = async (
   next: NextFunction
 ) => {
   try {
-    const { question, user_id, category_id, speech_tone, post_id } = req.body;
+    const { question, user_id, category_id, speech_tone, post_id, llm } = req.body as any;
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    // SSE headers and anti-buffering hints
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    // Nginx buffering off
+    res.setHeader('X-Accel-Buffering', 'no');
+    // Flush headers early so clients start processing immediately
+    (res as any).flushHeaders?.();
+    // Reduce Nagle’s algorithm buffering on the socket for faster flush
+    (res.socket as any)?.setNoDelay?.(true);
+    // Prime the SSE stream to break proxy buffering thresholds
+    res.write(':ok\n\n');
 
-    const stream = await answerStream(question, user_id, category_id, speech_tone, post_id);
-    stream.pipe(res);
+    const stream = await answerStream(question, user_id, category_id, speech_tone, post_id, llm);
+    // Manually bridge to ensure flushing of SSE deltas
+    stream.on('data', (chunk) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      res.write(buf);
+      const canFlush = typeof (res as any).flush === 'function';
+      // try to flush if supported by runtime/middleware
+      (res as any).flush?.();
+      try {
+        console.log(
+          JSON.stringify({ type: 'debug.sse.write', at: Date.now(), bytes: buf.length, flushed: canFlush })
+        );
+      } catch {}
+    });
+    stream.on('end', () => {
+      res.end();
+    });
+    stream.on('error', () => {
+      res.end();
+    });
+
+    // Cleanup if client disconnects
+    req.on('close', () => {
+      try {
+        stream.destroy();
+      } catch {}
+    });
 
   } catch (error) {
     next(error);

@@ -28,6 +28,19 @@ export const askSchema = z.object({
     category_id: z.number().optional(),
     post_id: z.number().optional(),
     speech_tone: z.number().optional(),
+    llm: z
+      .object({
+        provider: z.enum(['openai', 'gemini']).optional(),
+        model: z.string().optional(),
+        options: z
+          .object({
+            temperature: z.number().optional(),
+            top_p: z.number().optional(),
+            max_output_tokens: z.number().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   }),
 });
 

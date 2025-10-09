@@ -1,6 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import aiRouter from './routes/ai.routes';
+import aiV2Router from './routes/ai.v2.routes';
 
 const app: Express = express();
 
@@ -21,6 +22,7 @@ app.get('/', (request: Request, response: Response) => {
 });
 
 app.use('/ai', aiRouter);
+app.use('/ai/v2', aiV2Router);
 
 // Central Error Handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
