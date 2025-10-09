@@ -49,13 +49,13 @@ export const askHandler = async (
   next: NextFunction
 ) => {
   try {
-    const { question, user_id, category_id, speech_tone, post_id } = req.body;
+    const { question, user_id, category_id, speech_tone, post_id, llm } = req.body as any;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const stream = await answerStream(question, user_id, category_id, speech_tone, post_id);
+    const stream = await answerStream(question, user_id, category_id, speech_tone, post_id, llm);
     stream.pipe(res);
 
   } catch (error) {

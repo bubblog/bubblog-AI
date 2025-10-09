@@ -1,0 +1,33 @@
+export type ProviderName = 'openai' | 'gemini';
+
+export type OpenAIStyleMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool' | 'function';
+  content: string;
+};
+
+export type OpenAIStyleTool = {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+export type GenerateRequest = {
+  provider?: ProviderName;
+  model?: string;
+  messages?: OpenAIStyleMessage[];
+  tools?: OpenAIStyleTool[];
+  options?: {
+    temperature?: number;
+    top_p?: number;
+    max_output_tokens?: number;
+  };
+  meta?: {
+    userId?: string;
+    categoryId?: number;
+    postId?: number;
+  };
+};
+

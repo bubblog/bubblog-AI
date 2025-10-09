@@ -1,14 +1,10 @@
 import { createEmbeddings } from './embedding.service';
 import { PassThrough } from 'stream';
-import OpenAI from 'openai';
 import config from '../config';
 import * as postRepository from '../repositories/post.repository';
 import * as personaRepository from '../repositories/persona.repository';
 import * as qaPrompts from '../prompts/qa.prompts';
-
-const openai = new OpenAI({
-  apiKey: config.OPENAI_API_KEY,
-});
+import { generate } from '../llm';
 
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -27,20 +23,40 @@ const getSpeechTonePrompt = async (speechTone: number, userId: string): Promise<
   return "간결하고 명확한 말투로 답변해"; // Default
 }
 
+type LlmOverride = {
+  provider?: 'openai' | 'gemini';
+  model?: string;
+  options?: { temperature?: number; top_p?: number; max_output_tokens?: number };
+};
+
 export const answerStream = async (
   question: string,
   userId: string,
   categoryId?: number,
   speechTone: number = -1,
-  postId?: number
+  postId?: number,
+  llm?: LlmOverride
 ): Promise<PassThrough> => {
   const stream = new PassThrough();
 
-  let messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-  let tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined = undefined;
+  let messages: { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] = [];
+  let tools:
+    | {
+        type: 'function';
+        function: { name: string; description?: string; parameters?: Record<string, unknown> };
+      }[]
+    | undefined = undefined;
 
   (async () => {
     const speechTonePrompt = await getSpeechTonePrompt(speechTone, userId);
+    const toSimpleMessages = (
+      raw: any[]
+    ): { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] => {
+      return (raw || []).map((m: any) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      }));
+    };
 
     if (postId) {
       const post = await postRepository.findPostById(postId);
@@ -61,7 +77,9 @@ export const answerStream = async (
       stream.write(`event: exist_in_post_status\ndata: true\n\n`);
       stream.write(`event: context\ndata: ${JSON.stringify([{ postId: post.id, postTitle: post.title }])}\n\n`);
 
-      messages = qaPrompts.createPostContextPrompt(post, processedContent, question, speechTonePrompt);
+      messages = toSimpleMessages(
+        qaPrompts.createPostContextPrompt(post, processedContent, question, speechTonePrompt)
+      );
 
     } else {
       const [questionEmbedding] = await createEmbeddings([question]);
@@ -73,7 +91,9 @@ export const answerStream = async (
       const context = similarChunks.map(chunk => ({ postId: chunk.postId, postTitle: chunk.postTitle }));
       stream.write(`event: context\ndata: ${JSON.stringify(context)}\n\n`);
 
-      messages = qaPrompts.createRagPrompt(question, similarChunks, speechTonePrompt);
+      messages = toSimpleMessages(
+        qaPrompts.createRagPrompt(question, similarChunks, speechTonePrompt)
+      );
       tools = [
           {
             type: "function",
@@ -92,34 +112,21 @@ export const answerStream = async (
       ];
     }
 
-    const responseStream = await openai.chat.completions.create({
-      model: config.CHAT_MODEL,
+    const llmStream = await generate({
+      provider: llm?.provider || 'openai',
+      model: llm?.model || config.CHAT_MODEL,
       messages,
       tools,
-      tool_choice: tools ? 'auto' : undefined,
-      stream: true,
+      options: llm?.options,
+      meta: { userId, categoryId, postId },
     });
 
-    for await (const chunk of responseStream) {
-      const content = chunk.choices[0]?.delta?.content || "";
-      const toolCalls = chunk.choices[0]?.delta?.tool_calls;
-
-      if (toolCalls) {
-        for (const toolCall of toolCalls) {
-          if (toolCall.function?.arguments) {
-            stream.write(`event: answer\ndata: ${JSON.stringify(toolCall.function.arguments)}\n\n`);
-          }
-        }
-      } else if (content) {
-        stream.write(`event: answer\ndata: ${JSON.stringify(content)}\n\n`);
-      }
-
-      if (chunk.choices[0]?.finish_reason) {
-        stream.write(`event: end\ndata: [DONE]\n\n`);
-        stream.end();
-        break;
-      }
-    }
+    llmStream.on('data', (chunk) => {
+      stream.write(chunk);
+    });
+    llmStream.on('end', () => {
+      stream.end();
+    });
 
   })().catch(err => {
       console.error('Stream process error:', err);
