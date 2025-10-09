@@ -6,7 +6,7 @@ import aiV2Router from './routes/ai.v2.routes';
 const app: Express = express();
 
 // CORS 설정
-const allowedOrigins = ['http://localhost:3001', 'https://bubblog-fe.vercel.app'];
+const allowedOrigins = ['http://localhost:3001', 'https://bubblog-fe.vercel.app', 'https://bubblog.kro.kr'];
 
 const corsOptions: cors.CorsOptions = {
   origin: allowedOrigins,
