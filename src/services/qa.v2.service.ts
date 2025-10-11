@@ -181,22 +181,47 @@ export const answerStreamV2 = async (
           rows = await runHybridSearch(
             question,
             userId,
-            plan
+            plan,
+            { categoryId: categoryId ?? undefined, limit: plan.limit }
           );
           const hybridContext = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
           stream.write(`event: hybrid_result\n`);
           stream.write(`data: ${JSON.stringify(hybridContext)}\n\n`);
+          // Optional enriched metadata for clients that opt-in
+          try {
+            const hybridMeta = rows.map((r) => ({
+              postId: r.postId,
+              postTitle: r.postTitle,
+              chunkIndex: (r as any).chunkIndex ?? null,
+              createdAt: (r as any).postCreatedAt ?? null,
+              score: r.similarityScore,
+            }));
+            stream.write(`event: hybrid_result_meta\n`);
+            stream.write(`data: ${JSON.stringify(hybridMeta)}\n\n`);
+          } catch {}
 
           if (!rows.length) {
-            rows = await runSemanticSearch(question, userId, plan);
+            rows = await runSemanticSearch(question, userId, plan, { categoryId: categoryId ?? undefined });
           }
         } else {
-          rows = await runSemanticSearch(question, userId, plan);
+          rows = await runSemanticSearch(question, userId, plan, { categoryId: categoryId ?? undefined });
         }
 
         const context = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
         stream.write(`event: search_result\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
+        // Optional enriched metadata for clients that opt-in
+        try {
+          const resultMeta = rows.map((r) => ({
+            postId: r.postId,
+            postTitle: r.postTitle,
+            chunkIndex: (r as any).chunkIndex ?? null,
+            createdAt: (r as any).postCreatedAt ?? null,
+            score: r.similarityScore,
+          }));
+          stream.write(`event: search_result_meta\n`);
+          stream.write(`data: ${JSON.stringify(resultMeta)}\n\n`);
+        } catch {}
         stream.write(`event: exist_in_post_status\n`);
         stream.write(`data: ${JSON.stringify(rows.length > 0)}\n\n`);
         stream.write(`event: context\n`);

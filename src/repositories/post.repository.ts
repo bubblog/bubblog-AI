@@ -17,6 +17,9 @@ export interface SimilarChunk {
   postTitle: string;
   postChunk: string;
   similarityScore: number;
+  chunkIndex?: number;
+  postCreatedAt?: string;
+  postTags?: string[];
 }
 
 export interface TextSearchHit {
@@ -24,6 +27,9 @@ export interface TextSearchHit {
   postTitle: string;
   postChunk: string;
   textScore: number;
+  chunkIndex?: number;
+  postCreatedAt?: string;
+  postTags?: string[];
 }
 
 // ========= READ QUERIES =========
@@ -214,6 +220,7 @@ export const findSimilarChunksV2 = async (params: {
       fp.post_id,
       fp.post_title,
       pc.content AS post_chunk,
+      pc.chunk_index AS chunk_index,
       (${wChunk} * (1.0 - (pc.embedding <=> $2))) + (${wTitle} * (1.0 - (pte.embedding <=> $2))) AS similarity_score,
       fp.created_at
     FROM filtered_posts fp
@@ -246,6 +253,9 @@ export const findSimilarChunksV2 = async (params: {
     postTitle: row.post_title,
     postChunk: row.post_chunk,
     similarityScore: row.similarity_score,
+    chunkIndex: row.chunk_index,
+    postCreatedAt: row.created_at,
+    postTags: [],
   }));
 };
 
@@ -297,6 +307,7 @@ export const textSearchChunksV2 = async (params: {
       fp.post_id,
       fp.post_title,
       pc.content AS post_chunk,
+      pc.chunk_index AS chunk_index,
       0::float8 AS content_sim,
       0::float8 AS title_sim,
       fp.created_at
@@ -310,6 +321,7 @@ export const textSearchChunksV2 = async (params: {
         fp.post_id,
         fp.post_title,
         pc.content AS post_chunk,
+        pc.chunk_index AS chunk_index,
         COALESCE(similarity(pc.content, $${qParam}), 0) AS content_sim,
         COALESCE(similarity(fp.post_title, $${qParam}), 0) AS title_sim,
         fp.created_at
@@ -357,5 +369,8 @@ LIMIT $${limitParam}`;
     postTitle: row.post_title,
     postChunk: row.post_chunk,
     textScore: Math.max(Number(row.content_sim) || 0, Number(row.title_sim) || 0),
+    chunkIndex: row.chunk_index,
+    postCreatedAt: row.created_at,
+    postTags: [],
   }));
 };

@@ -7,12 +7,15 @@ export type SemanticSearchResult = {
   postTitle: string;
   postChunk: string;
   similarityScore: number;
+  chunkIndex?: number;
+  postCreatedAt?: string;
 }[];
 
 export const runSemanticSearch = async (
   question: string,
   userId: string,
-  plan: SearchPlan
+  plan: SearchPlan,
+  opts?: { categoryId?: number }
 ): Promise<SemanticSearchResult> => {
   const [embedding] = await createEmbeddings([question]);
 
@@ -22,7 +25,7 @@ export const runSemanticSearch = async (
   const rows = await postRepository.findSimilarChunksV2({
     userId,
     embedding,
-    categoryId: (plan.filters as any)?.category_ids?.[0],
+    categoryId: opts?.categoryId,
     from,
     to,
     threshold: plan.threshold,
@@ -33,4 +36,3 @@ export const runSemanticSearch = async (
 
   return rows;
 };
-

@@ -1,71 +1,136 @@
-## 하이브리드 서치 확장(질문 재작성 + 키워드)
+## Hybrid Search Upgrade Plan (Working Doc)
 
-목표
-- 리콜 향상: 질문을 LLM이 재작성(rewrites)하고, 핵심 키워드를 생성하여 벡터+텍스트 양쪽에서 검색.
-- 정밀/비용 제어: 재작성/키워드 개수를 제한하고, 융합 가중치로 결과를 안정적으로 선별.
+### 1. Current Implementation Snapshot
+- `runHybridSearch(question, userId, plan)` (src/services/hybrid-search.service.ts)
+  - Embeds `[question, ...plan.rewrites]` and runs `findSimilarChunksV2` per embedding.
+  - Executes `textSearchChunksV2` once using the original question + keywords.
+  - Merges chunk candidates by `postId:postChunk`, keeps max vector/text score per chunk, min–max normalizes each modality, then fuses via `alpha` blend.
+  - Returns top `plan.top_k` chunks (capped 10); `plan.limit` ignored here.
+- Semantic-only fallback uses same repository call without text blending (`runSemanticSearch`).
+- Planner (`generateSearchPlan`) currently emits rewrites/keywords but keyword quality/quantity varies; schema clamps counts post-hoc.
+- Category filters from API are not wired into hybrid search; text rewrites are not reused in lexical search; chunk key uses raw text.
 
-Plan JSON 확장(초안)
-```json
-{
-  "rewrites": ["..."],
-  "keywords": ["..."],
-  "hybrid": { "enabled": true, "alpha": 0.7, "max_rewrites": 4, "max_keywords": 8 }
-}
-```
-- 기존 필드(`top_k`, `threshold`, `weights`, `filters.time`, `sort`, `limit`)와 공존.
-- 서버에서 상한 강제(rewrites<=4, keywords<=8), 품질이 낮거나 중복인 항목 제거.
+### 2. Pain Points & Gaps
+1. **Filtering gaps** – category/time filters partially ignored, final `limit` unused, vector threshold normalization can collapse to zero when max=min.
+2. **Keyword quality** – LLM often emits multi-word phrases or duplicates; count not consistently within intended range.
+3. **Rewrite redundancy** – All rewrites treated equally; no semantic-distance-aware weighting → aggressive rewrites may be undervalued or noisy ones over-weighted.
+4. **Fused scoring sensitivity** – Min–max normalization across union is brittle when modalities have outliers; no similarity-based bonus for high-confidence hits.
+5. **Post-level UX** – Current pipeline optimized for RAG chunk retrieval; no reusable API that returns deduplicated post-level hits with pagination.
+6. **Observability** – Limited metrics around rewrite effectiveness, keyword usage, or threshold activations.
 
-프롬프트 가이드(확장)
-- 역할: ‘검색 계획 + 재작성/키워드 생성’
-- 출력: 기존 계획 JSON + `rewrites[]`, `keywords[]`, `hybrid{}`
-- 규칙:
-  - 불용/범용 단어(예: "글", "포스트", "블로그") 지양
-  - 과도한 시기/주제 확장 금지(사용자 블로그 컨텍스트 벗어나지 않기)
-  - 중복/동의어 반복 최소화(문장 유사도 과다 시 제거)
+### 3. Goals & Guiding Principles
+- Preserve strong recall via multi-embedding + lexical hybrid while adding stability and transparency.
+- Make rewrite/keyword generation purposeful: enforce concise tokens, staged semantic drift, and maintain question coverage.
+- Provide a standalone hybrid search endpoint for user-facing search with post-level results.
+- Instrument similarity thresholds and modality contributions to support tuning.
 
-하이브리드 검색 파이프라인
-1) 멀티 벡터 검색: 원 질문 + rewrites 각각 임베딩 → pgvector Top-K 검색(합집합)
-2) 텍스트 검색: keywords로 `post_chunks.content`/`blog_post.title` 텍스트 매칭 → Top-K 추출
-3) 랭킹 융합: 점수 정규화 후 `score = α·vec + (1-α)·text` 또는 RRF로 병합 → 상위 N 청크 선택
-4) 컨텍스트 구성: v1과 동일 프롬프트로 최종 LLM 호출
+### 4. Retrieval Quality Enhancements (Track A)
 
-저장소/인덱스(제안)
-- PostgreSQL 확장: `pg_trgm`(간단/범용) 또는 `tsvector`(정교)
-- 1차안(pg_trgm)
-  - DDL: 
-    - `CREATE EXTENSION IF NOT EXISTS pg_trgm;`
-    - `CREATE INDEX IF NOT EXISTS idx_pc_content_trgm ON post_chunks USING gin (content gin_trgm_ops);`
-    - `CREATE INDEX IF NOT EXISTS idx_bp_title_trgm ON blog_post USING gin (title gin_trgm_ops);`
-  - 질의: `similarity(content, $q) > $min OR content ILIKE ANY($patterns)` 등으로 text_score 계산
+4.1 **Similarity Threshold Boosting**
+- Reuse the existing retrieval bias labels (`lexical`, `balanced`, `semantic`) to derive both `alpha` and default modality thresholds (`sem_boost_threshold`, `lex_boost_threshold`) so planner output stays compact. Defaults (retain current behavior for now):
+  - `lexical`: `alpha = 0.30`, `sem_boost_threshold = 0.65`, `lex_boost_threshold = 0.80`
+  - `balanced`: `alpha = 0.50`, `sem_boost_threshold = 0.70`, `lex_boost_threshold = 0.75`
+  - `semantic`: `alpha = 0.75`, `sem_boost_threshold = 0.80`, `lex_boost_threshold = 0.65`
+- Encode the mapping as a single constants table (e.g., `RETRIEVAL_BIAS_PRESETS`) so both planner normalization and hybrid scoring reference identical values.
+- Permit optional overrides in `plan.hybrid`, but clamp to sensible bounds (e.g., 0.4–0.85) for consistency.
+- When a normalized vector/text score crosses its threshold, apply a bounded boost (e.g., multiply by 1.1–1.3 or add 0.1), log activations, and cap boosts to maintain ranking stability.
 
-SSE 확장(선택)
-- `event: rewrite` / `data: ["..."]`
-- `event: keywords` / `data: ["..."]`
-- `event: hybrid_result` / `data: [{ postId, postTitle }]`
+4.2 **Rewrite Strategy & Weighting**
+- Update planner prompt to generate staged rewrites:
+  - `rewrite_1`: conservative paraphrase.
+  - `rewrite_2`: adds synonymous term / clarifies entity.
+  - `rewrite_3+`: higher semantic drift or alternative framing.
+- After plan normalization (`search-plan.service.ts`):
+  - Compute embedding-based cosine similarity between original question and each rewrite.
+  - Drop rewrites below a floor (e.g., <0.35) or route them to lexical-only usage.
+  - Derive per-rewrite weights (e.g., `weight = clamp(similarity, 0.6, 1.2)`) and supply to `runHybridSearch`.
+  - Similarity calculations use fresh embedding API calls (no caching) for both the question and rewrites within the request.
+- In hybrid service, apply weights when aggregating vector scores (weighted max/avg instead of pure max) so high-quality rewrites contribute proportionally.
 
-보안/안전
-- 재작성/키워드 출력 스키마 강제(JSON), 길이/개수 상한
-- 금칙어/민감어 필터(선택), 카테고리/기간 필터는 서버가 최종 결정
+4.3 **Keyword Constraints & Quality**
+- Modify `planSchema` / prompt: keywords must be single Korean/English tokens (no spaces), trimmed, 1–5 items.
+- In normalization, enforce `.slice(0,5)`, drop tokens <2 chars or containing whitespace/punctuation (except hyphen/underscore if needed).
+- Extend text search to run over `[question, ...filtered rewrites]` for lexical recall or compute textual similarity per rewrite (optional v2 step).
 
-세부 구현 계획(하이브리드 서치)
-1) 스키마/프롬프트
-  - [ ] `src/types/ai.v2.types.ts`: Plan 스키마에 `rewrites[]`, `keywords[]`, `hybrid{enabled,alpha,max_rewrites,max_keywords}` 추가
-  - [ ] `src/prompts/qa.v2.prompts.ts`: 프롬프트/JSON Schema에 확장 필드 반영 + few-shot 보강
-2) 플래너 서비스
-  - [ ] `search-plan.service.ts`: 확장 필드 파싱/검증, 중복/불용어 필터링, 상한 강제
-3) 텍스트 검색 저장소
-  - [ ] `post.repository.ts`: `textSearchChunksV2({ userId, query, keywords[], from?, to?, topK })`
-  - [ ] (옵션) DDL 문서화: pg_trgm 인덱스 생성 스크립트 추가
-4) 하이브리드 서비스
-  - [ ] `hybrid-search.service.ts` 구현: 멀티 임베딩, 텍스트 검색, 정규화, α 융합/RRF, 상위 N 반환
-5) 오케스트레이션/이벤트
-  - [ ] `qa.v2.service.ts`: plan.hybrid.enabled 시 하이브리드 경로 분기, (선택) `rewrite`/`keywords`/`hybrid_result` 송신
-6) 테스트/튜닝
-  - [ ] 통합 테스트: 재작성/키워드 포함 질의에서 리콜↑ 확인
-  - [ ] 가중치 α, Top-K 상수, 불용어/중복 필터 기준 튜닝
-  - [ ] 0건/오류 폴백(v1 RAG) 검증
+4.4 **Repository/Data Adjustments**
+- Update `findSimilarChunksV2` / `textSearchChunksV2` to return `chunk_index`, `post_created_at`, and optionally `post_tags` for downstream boosts.
+  - Tag aggregation via `post_tag` ⇔ `tag` should be added only if such tables exist; otherwise return `[]` and skip joins.
+- Switch dedup key to `${postId}:${chunk_index}` to avoid string-heavy keys.
+- Filters wiring: Do NOT add `filters.category_ids` to the plan. Keep the plan schema limited to `filters.time`.
+  - Use `categoryId` from the controller as a server-side pre-filter only.
+  - Derive `from/to` from the normalized plan time window (label → absolute) and apply in repositories.
+  - Respect `plan.limit` at the final slicing stage.
+- Keep retrieval as exact KNN on `pgvector` (ORDER BY `<=>`); `top_k` stays per-source fetch size while final slicing respects `plan.limit`.
 
-권장 단계적 도입
-- Phase 1: 스키마/프롬프트/하이브리드 파이프라인 구현(기본 α=0.7, rewrites<=3, keywords<=6)
-- Phase 2: SSE 관측성 이벤트 추가, 품질 튜닝
-- Phase 3: 인덱스/성능 최적화, 불용어 사전/NER 보정
+<!-- moved to Backlog: see section 11 -->
+
+### 5. Search API & Post-Level Experience (Track B)
+- **Service decomposition** – Extract shared primitive `buildHybridCandidates({ question, rewrites, keywords, plan, userId, categoryId })` returning chunk-level scores + metadata + diagnostic stats.
+- **Post aggregation** – Create aggregator to deduplicate by post (max score, optional average of top 2, representative snippet) and apply deterministic `limit/offset` pagination (page size default 10, max 10).
+- **Public API** – Add unauthenticated REST endpoint (JSON, no SSE) such as `GET /search/hybrid` accepting question, filters, paging params; reuse the planner or a lightweight variant as UX dictates.
+- **QA reuse** – `answerStreamV2` continues calling chunk-level layer; search endpoint uses same embeddings/threshold logic to avoid drift.
+
+### 6. Prompts & Planner Improvements
+- Update `buildSearchPlanPrompt` instructions:
+  - Require keywords to be single words, explicitly request “1~5 단일 키워드”.
+  - Outline staged rewrite roles to nudge LLM output.
+  - Remind that temporal expressions stay in `filters.time`.
+- Keep the client-facing `planSchema` minimal (no explicit `alpha`/threshold/weight fields). Server derives weights/thresholds internally from the retrieval bias label and does not surface them to the frontend.
+- Update schema docs only for keyword bounds (1–5) and any internal validation notes; no additional fields are exposed over the API.
+- In normalization, log keyword count, rewrite count, threshold values to support telemetry.
+
+### 7. Observability & Telemetry
+- Structured logs/SSE events:
+  - For each query: number of rewrites retained, similarity weights, threshold boosts triggered, counts per modality.
+  - Emit metrics for search endpoint (total posts returned, pagination info, latency).
+- Standardize a log payload (e.g., `type: 'retrieval.boost', bias, alpha, sem_thr, lex_thr, modality, original_score, boosted_score`) to simplify analysis and tuning.
+- Add debug flags to inspect per-rewrite vector/text hit lists for evaluation.
+
+### 8. Performance Considerations
+- Generate embeddings for `[question, rewrites]` with fresh API calls per request (no caching); accept the additional cost for correctness.
+- Cap total vector queries by `plan.hybrid.max_rewrites`; consider batching embeddings via OpenAI API if supported.
+- Monitor effect of threshold boosts on latency; adjust SQL to prefetch needed metadata in single round-trip.
+
+### 9. Execution Roadmap (Detailed)
+
+**Phase 0 – Foundations & Bugfixes**
+- Task 0.1: Thread request filters (`categoryId`, `limit`) through `qa.v2.service.ts`. Do NOT add `filters.category_ids` to the plan; the server applies `categoryId` as a pre-filter. Derive `from/to` solely from the normalized plan `filters.time` (label → absolute) and use in repositories.
+- Task 0.2: Honor `plan.limit` when returning hybrid results, switch dedupe key to `${postId}:${chunk_index}`, and propagate `chunk_index` through types.
+- Task 0.3: Expand `findSimilarChunksV2`/`textSearchChunksV2` to select `chunk_index`, `post_created_at`, and optionally aggregated `post_tags` (only if tag tables exist); update SQL joins and DTOs with safe fallbacks.
+- Task 0.4: Update hybrid/semantic services to surface new metadata in SSE payloads, keeping backward compatibility for existing clients.
+
+**Phase 1 – Planner & Prompt Hardening**
+- Task 1.1: Tighten `planSchema` validation (keywords 1–5 single tokens, rewrites ≤ max_rewrites) and normalize via shared helpers with telemetry hooks.
+- Task 1.2: Revise `buildSearchPlanPrompt` instructions to enforce staged rewrites, single-token keywords, and explicit temporal guidance; add regression fixtures for prompt drift.
+- Task 1.3: Implement normalization pass that cleans keywords, generates embeddings for rewrites, filters low-similarity variants, and records per-rewrite cosine similarity.
+- Task 1.4: Persist summary logs (`rewrites_len`, similarity weights, keyword counts) via structured logger for observability.
+
+**Phase 2 – Retrieval Scoring Upgrades**
+- Task 2.1: Introduce `RETRIEVAL_BIAS_PRESETS` mapping (`alpha`, `sem_boost_threshold`, `lex_boost_threshold`) and clamp overrides in normalization.
+- Task 2.2: Apply threshold-based boosts in `runHybridSearch`, logging activations and capping final scores for stability.
+- Task 2.3: Weight vector scores by rewrite similarity (e.g., weighted max/avg) and expose diagnostics per rewrite.
+- Task 2.4: Extend lexical search to iterate across `[question, rewrites]`, merging results while respecting keyword filters and avoiding redundant queries.
+- Task 2.5: Enforce post-level diversity (max N chunks/post) before final ranking and respect `plan.limit` after fusion.
+
+**Phase 3 – Search API Delivery**
+- Task 3.1: Extract `buildHybridCandidates` service returning chunk-level hits plus diagnostics; retrofit QA flow to consume it.
+- Task 3.2: Build post aggregation layer (score fusion, snippet selection, pagination respecting `limit/offset`) with deterministic ordering.
+- Task 3.3: Add `GET /search/hybrid` route, request validation, and integration tests covering filters, pagination, and telemetry events.
+- Task 3.4: Document API usage and ensure rate-limiting/auth hooks match product requirements.
+
+**Phase 4 – Tuning & Observability**
+- Task 4.1: Emit structured SSE/log events for threshold boosts, rewrite weighting, keyword pruning, and modality contributions.
+- Task 4.2: Backfill dashboards or log queries (e.g., BigQuery/Redash) to monitor latency, hit counts, and boost frequency.
+- Task 4.3: Create evaluation playbook with canonical queries, offline regression scripts, and guidance for tuning boost factors.
+- Task 4.4: Investigate alternative fusion strategies (RRF/z-score) gated behind feature flags for safe experimentation.
+
+### 10. Open Questions
+- Do we need separate planner settings for public search vs QA (e.g., higher keyword count)?
+- Should rewrite weights persist back into plan schema for transparency to the client?
+- What default boost factors strike best balance between recall and precision? Requires offline eval.
+
+---
+Use this document as the anchor before implementation; update sections as design decisions finalize or metrics inform threshold choices.
+
+### 11. Backlog
+- Normalization stability (min–max collapse): evaluate mitigations without immediate implementation. Candidates include constant fallback (e.g., 0.5), epsilon guards, rank-based fusion (RRF), z-score fusion, unimodal fallback, and telemetry for activation frequency.

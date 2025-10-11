@@ -127,7 +127,9 @@
   2) (하이브리드 사용 시) `rewrite`: `string[]`
   3) (하이브리드 사용 시) `keywords`: `string[]`
   4) (하이브리드 사용 시) `hybrid_result`: `[ { postId, postTitle }, ... ]`
+     - 선택: `hybrid_result_meta`: `[ { postId, postTitle, chunkIndex?, createdAt?, score } ]`
   5) `search_result`: `[ { postId, postTitle }, ... ]` — 최종 컨텍스트 요약(하이브리드 또는 시맨틱)
+     - 선택: `search_result_meta`: `[ { postId, postTitle, chunkIndex?, createdAt?, score } ]`
   6) `exist_in_post_status`: `true|false`
   7) `context`: `[ { postId, postTitle }, ... ]`
   8) `answer` — 모델 부분 응답(여러 번)

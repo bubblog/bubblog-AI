@@ -7,27 +7,32 @@ export type HybridSearchResult = {
   postTitle: string;
   postChunk: string;
   similarityScore: number;
+  chunkIndex?: number;
+  postCreatedAt?: string;
 }[];
 
 type Candidate = {
   postId: string;
   postTitle: string;
   postChunk: string;
+  chunkIndex?: number;
   vecScore?: number;
   textScore?: number;
+  postCreatedAt?: string;
 };
 
 export const runHybridSearch = async (
   question: string,
   userId: string,
-  plan: SearchPlan
+  plan: SearchPlan,
+  opts?: { categoryId?: number; limit?: number }
 ): Promise<HybridSearchResult> => {
   const queries = [question, ...((plan.rewrites as string[]) || [])];
   const alpha = Math.max(0, Math.min(1, (plan.hybrid as any)?.alpha ?? 0.7));
 
   const from = (plan.filters as any)?.time?.type === 'absolute' ? (plan.filters as any).time.from : undefined;
   const to = (plan.filters as any)?.time?.type === 'absolute' ? (plan.filters as any).time.to : undefined;
-  const categoryId = (plan.filters as any)?.category_ids?.[0];
+  const categoryId = opts?.categoryId;
 
   const embeddings = await createEmbeddings(queries);
 
@@ -47,11 +52,11 @@ export const runHybridSearch = async (
       sort: plan.sort,
     });
     for (const r of rows) {
-      const key = `${r.postId}:${r.postChunk}`;
+      const key = `${r.postId}:${(r as any).chunkIndex ?? r.postChunk}`;
       const prev = byKey.get(key);
       const curVec = Number(r.similarityScore) || 0;
       if (!prev) {
-        byKey.set(key, { postId: r.postId, postTitle: r.postTitle, postChunk: r.postChunk, vecScore: curVec });
+        byKey.set(key, { postId: r.postId, postTitle: r.postTitle, postChunk: r.postChunk, chunkIndex: (r as any).chunkIndex, vecScore: curVec, postCreatedAt: (r as any).postCreatedAt });
       } else {
         prev.vecScore = Math.max(prev.vecScore || 0, curVec);
       }
@@ -69,11 +74,11 @@ export const runHybridSearch = async (
     sort: plan.sort,
   });
   for (const r of textRows) {
-    const key = `${r.postId}:${r.postChunk}`;
+    const key = `${r.postId}:${(r as any).chunkIndex ?? r.postChunk}`;
     const prev = byKey.get(key);
     const curText = Number(r.textScore) || 0;
     if (!prev) {
-      byKey.set(key, { postId: r.postId, postTitle: r.postTitle, postChunk: r.postChunk, textScore: curText });
+      byKey.set(key, { postId: r.postId, postTitle: r.postTitle, postChunk: r.postChunk, chunkIndex: (r as any).chunkIndex, textScore: curText, postCreatedAt: (r as any).postCreatedAt });
     } else {
       prev.textScore = Math.max(prev.textScore || 0, curText);
     }
@@ -94,11 +99,10 @@ export const runHybridSearch = async (
       const v = norm(c.vecScore || 0, vMin, vMax);
       const t = norm(c.textScore || 0, tMin, tMax);
       const score = alpha * v + (1 - alpha) * t;
-      return { postId: c.postId, postTitle: c.postTitle, postChunk: c.postChunk, similarityScore: score };
+      return { postId: c.postId, postTitle: c.postTitle, postChunk: c.postChunk, similarityScore: score, chunkIndex: c.chunkIndex, postCreatedAt: c.postCreatedAt };
     })
     .sort((a, b) => b.similarityScore - a.similarityScore)
-    .slice(0, Math.min(10, Math.max(1, plan.top_k || 5)));
+    .slice(0, Math.min(20, Math.max(1, (opts?.limit ?? plan.limit ?? 5))));
 
   return fused;
 };
-
