@@ -102,6 +102,7 @@ export const buildSearchPlanPrompt = (params: {
     '7) If the question asks for N items (e.g., “N개”), set limit=N within bounds.',
     '8) Keep weights to defaults unless a clear need implies otherwise.',
     '8) When helpful for recall, set hybrid.enabled=true and choose hybrid.retrieval_bias ∈ {lexical, balanced, semantic}. Then generate concise rewrites (<= max_rewrites) and focused keywords (<= max_keywords).',
+    '   - Keywords MUST be single tokens (no spaces). Prefer 1~5 short tokens in Korean/English; allow hyphen/underscore; avoid punctuation/stopwords.',
     '   - lexical: keyword/정확 매칭이 중요할 때 (숫자, 버전, 고유명사 등).',
     '   - balanced: 일반 질의.',
     '   - semantic: 개념/요약/의도 중심일 때.',
