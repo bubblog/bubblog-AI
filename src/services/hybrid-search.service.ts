@@ -26,7 +26,7 @@ export const runHybridSearch = async (
   question: string,
   userId: string,
   plan: SearchPlan,
-  opts?: { categoryId?: number; limit?: number }
+  opts?: { categoryId?: number; limit?: number; global?: boolean }
 ): Promise<HybridSearchResult> => {
   const rewrites = ((plan.rewrites as string[]) || []);
   const queries = [question, ...rewrites];
@@ -59,11 +59,26 @@ export const runHybridSearch = async (
   const weightsByIndex: number[] = new Array(embeddings.length).fill(1);
   const keepIndex: boolean[] = new Array(embeddings.length).fill(true);
   const floor = 0.35; // similarity floor in [0,1]
+  const isDeclarative = (s: string): boolean => {
+    const str = (s || '').trim();
+    if (!str) return false;
+    if (/[?？]$/.test(str) || str.includes('?')) return false;
+    const lower = str.toLowerCase();
+    if (/입니다[.!]?$/.test(str) || /이다[.!]?$/.test(str) || /다[.!]?$/.test(str)) return true;
+    if (/( is | are | was | were )/.test(` ${lower} `)) return true;
+    if (/[.!]$/.test(str)) return true;
+    return false;
+  };
 
   for (let i = 1; i < embeddings.length; i++) {
     const sim = cos(qEmb, embeddings[i]); // [-1,1]
     const sim01 = Math.max(0, Math.min(1, (sim + 1) / 2));
-    const weight = 0.6 + 0.6 * sim01; // map to [0.6, 1.2]
+    let weight = 0.6 + 0.6 * sim01; // map to [0.6, 1.2]
+    const rw = rewrites[i - 1] || '';
+    if (isDeclarative(rw)) {
+      const floorBase = bias === 'semantic' ? 1.0 : 0.95;
+      if (weight < floorBase) weight = floorBase;
+    }
     weightsByIndex[i] = weight;
     if (sim01 < floor) keepIndex[i] = false; // drop low-quality rewrites for vector path
   }
@@ -77,6 +92,7 @@ export const runHybridSearch = async (
           rewrites,
           weights: weightsByIndex.slice(1),
           kept: keepIndex.slice(1),
+          decl_flags: rewrites.map((r) => isDeclarative(r)),
           alpha,
         },
         null,
@@ -90,17 +106,26 @@ export const runHybridSearch = async (
   for (let i = 0; i < embeddings.length; i++) {
     if (!keepIndex[i]) continue;
     const emb = embeddings[i];
-    const rows = await postRepository.findSimilarChunksV2({
-      userId,
-      embedding: emb,
-      categoryId,
-      from,
-      to,
-      threshold: plan.threshold,
-      topK: plan.top_k,
-      weights: plan.weights,
-      sort: plan.sort,
-    });
+    const rows = opts?.global
+      ? await postRepository.findSimilarChunksGlobalANN({
+          embedding: emb,
+          threshold: plan.threshold,
+          topK: plan.top_k * 5,
+          weights: plan.weights,
+          sort: plan.sort,
+          annFactor: 5,
+        })
+      : await postRepository.findSimilarChunksV2({
+          userId,
+          embedding: emb,
+          categoryId,
+          from,
+          to,
+          threshold: plan.threshold,
+          topK: plan.top_k,
+          weights: plan.weights,
+          sort: plan.sort,
+        });
     for (const r of rows) {
       const key = `${r.postId}:${(r as any).chunkIndex ?? r.postChunk}`;
       const prev = byKey.get(key);
@@ -113,16 +138,23 @@ export const runHybridSearch = async (
     }
   }
 
-  const textRows = await postRepository.textSearchChunksV2({
-    userId,
-    query: question,
-    keywords: (plan.keywords as string[]) || [],
-    categoryId,
-    from,
-    to,
-    topK: plan.top_k,
-    sort: plan.sort,
-  });
+  const textRows = opts?.global
+    ? await postRepository.textSearchChunksGlobal({
+        query: question,
+        keywords: (plan.keywords as string[]) || [],
+        topK: plan.top_k * 3,
+        sort: plan.sort,
+      })
+    : await postRepository.textSearchChunksV2({
+        userId,
+        query: question,
+        keywords: (plan.keywords as string[]) || [],
+        categoryId,
+        from,
+        to,
+        topK: plan.top_k,
+        sort: plan.sort,
+      });
   for (const r of textRows) {
     const key = `${r.postId}:${(r as any).chunkIndex ?? r.postChunk}`;
     const prev = byKey.get(key);
@@ -134,15 +166,6 @@ export const runHybridSearch = async (
     }
   }
 
-  const list = Array.from(byKey.values());
-  const vecVals = list.map((c) => c.vecScore || 0);
-  const textVals = list.map((c) => c.textScore || 0);
-  const vMin = Math.min(...vecVals, 0);
-  const vMax = Math.max(...vecVals, 0);
-  const tMin = Math.min(...textVals, 0);
-  const tMax = Math.max(...textVals, 0);
-
-  const normalize01 = (v: number, lo: number, hi: number) => (hi > lo ? (v - lo) / (hi - lo) : 0);
   let semBoostCount = 0;
   let lexBoostCount = 0;
 
@@ -152,16 +175,23 @@ export const runHybridSearch = async (
     const q = rewrites[i - 1];
     if (!q || typeof q !== 'string' || !q.trim()) continue;
     try {
-      const rows = await postRepository.textSearchChunksV2({
-        userId,
-        query: q,
-        keywords: (plan.keywords as string[]) || [],
-        categoryId,
-        from,
-        to,
-        topK: plan.top_k,
-        sort: plan.sort,
-      });
+      const rows = opts?.global
+        ? await postRepository.textSearchChunksGlobal({
+            query: q,
+            keywords: (plan.keywords as string[]) || [],
+            topK: plan.top_k * 3,
+            sort: plan.sort,
+          })
+        : await postRepository.textSearchChunksV2({
+            userId,
+            query: q,
+            keywords: (plan.keywords as string[]) || [],
+            categoryId,
+            from,
+            to,
+            topK: plan.top_k,
+            sort: plan.sort,
+          });
       for (const r of rows) {
         const key = `${r.postId}:${(r as any).chunkIndex ?? r.postChunk}`;
         const prev = byKey.get(key);
@@ -174,6 +204,16 @@ export const runHybridSearch = async (
       }
     } catch {}
   }
+
+  const list = Array.from(byKey.values());
+  const vecVals = list.map((c) => c.vecScore || 0);
+  const textVals = list.map((c) => c.textScore || 0);
+  const vMin = Math.min(...vecVals, 0);
+  const vMax = Math.max(...vecVals, 0);
+  const tMin = Math.min(...textVals, 0);
+  const tMax = Math.max(...textVals, 0);
+
+  const normalize01 = (v: number, lo: number, hi: number) => (hi > lo ? (v - lo) / (hi - lo) : 0);
 
   const boosted = list.map((c) => {
     let v = normalize01(c.vecScore || 0, vMin, vMax);

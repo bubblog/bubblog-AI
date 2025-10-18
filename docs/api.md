@@ -171,3 +171,24 @@
 - v1 `/ai/ask`: 컨텍스트 존재 여부와 요약(`exist_in_post_status`, `context`) 후 답변 스트리밍
 - v2 `/ai/v2/ask`: 위 흐름에 더해 검색 계획(`search_plan`)과 검색 결과 요약(`search_result`)을 추가로 제공
 - 임베딩 API(v1): 게시물 제목/본문 임베딩 생성 및 저장
+
+## 검색 엔드포인트 (`/search`)
+
+### GET `/search/hybrid`
+- 인증: 불필요(공개)
+- 쿼리 파라미터
+  - `question`(string, required)
+  - `limit`(1..10, optional, default 10)
+  - `offset`(>=0, optional, default 0)
+- 동작: v2 플래너로 계획을 생성/정규화 후 글로벌(전체 DB) 하이브리드 검색(시멘틱 경로에 ANN 사용)을 수행하고, 청크 후보를 포스트 단위로 집계해 JSON으로 반환합니다.
+- 응답(200)
+  ```json
+  {
+    "query": { "question": "...", "limit": 10, "offset": 0 },
+    "plan": { "mode": "rag", "top_k": 5, "threshold": 0.2, "weights": { "chunk": 0.7, "title": 0.3 }, "sort": "created_at_desc", "limit": 5, "hybrid": { "enabled": true, "retrieval_bias": "balanced", "alpha": 0.5 }, "time": { "type": "absolute", "from": "...", "to": "..." }, "rewrites_len": 2, "keywords_len": 3 },
+    "total_posts": 8,
+    "posts": [
+      { "postId": "123", "postTitle": "...", "score": 0.92, "createdAt": "...", "best": { "chunkIndex": 0, "snippet": "...", "score": 0.88 } }
+    ]
+  }
+  ```

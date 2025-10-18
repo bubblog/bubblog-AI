@@ -15,24 +15,33 @@ export const runSemanticSearch = async (
   question: string,
   userId: string,
   plan: SearchPlan,
-  opts?: { categoryId?: number }
+  opts?: { categoryId?: number; global?: boolean }
 ): Promise<SemanticSearchResult> => {
   const [embedding] = await createEmbeddings([question]);
 
   const from = (plan.filters as any)?.time?.type === 'absolute' ? (plan.filters as any).time.from : undefined;
   const to = (plan.filters as any)?.time?.type === 'absolute' ? (plan.filters as any).time.to : undefined;
 
-  const rows = await postRepository.findSimilarChunksV2({
-    userId,
-    embedding,
-    categoryId: opts?.categoryId,
-    from,
-    to,
-    threshold: plan.threshold,
-    topK: plan.top_k,
-    weights: plan.weights,
-    sort: plan.sort,
-  });
+  const rows = opts?.global
+    ? await postRepository.findSimilarChunksGlobalANN({
+        embedding,
+        threshold: plan.threshold,
+        topK: plan.top_k * 5,
+        weights: plan.weights,
+        sort: plan.sort,
+        annFactor: 5,
+      })
+    : await postRepository.findSimilarChunksV2({
+        userId,
+        embedding,
+        categoryId: opts?.categoryId,
+        from,
+        to,
+        threshold: plan.threshold,
+        topK: plan.top_k,
+        weights: plan.weights,
+        sort: plan.sort,
+      });
 
   return rows;
 };
