@@ -32,19 +32,101 @@ export const getSearchPlanSchemaJson = (): Record<string, unknown> => ({
       required: ['enabled', 'retrieval_bias', 'max_rewrites', 'max_keywords'],
     },
     // Only time is allowed under filters. Responses JSON Schema requires closed objects
-    // with explicit required fields at each level. We constrain time to label-form only.
+    // with explicit required fields at each level.
     filters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         time: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            type: { type: 'string', enum: ['label'] },
-            label: { type: 'string', minLength: 1 },
-          },
-          required: ['type', 'label'],
+          anyOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['label'] },
+                label: { type: 'string', minLength: 1 },
+              },
+              required: ['type', 'label'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['named'] },
+                preset: {
+                  enum: ['all_time', 'all', 'today', 'yesterday', 'last_7_days', 'last_14_days', 'last_30_days', 'this_month', 'last_month'],
+                },
+              },
+              required: ['type', 'preset'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['relative'] },
+                unit: { enum: ['day', 'week', 'month', 'year'] },
+                value: { type: 'integer', minimum: 1, maximum: 365 },
+              },
+              required: ['type', 'unit', 'value'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['absolute'] },
+                from: { type: 'string', format: 'date-time' },
+                to: { type: 'string', format: 'date-time' },
+              },
+              required: ['type', 'from', 'to'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['month'] },
+                month: { type: 'integer', minimum: 1, maximum: 12 },
+              },
+              required: ['type', 'month'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['month'] },
+                month: { type: 'integer', minimum: 1, maximum: 12 },
+                year: { type: 'integer' },
+              },
+              required: ['type', 'month', 'year'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['quarter'] },
+                quarter: { type: 'integer', minimum: 1, maximum: 4 },
+              },
+              required: ['type', 'quarter'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['quarter'] },
+                quarter: { type: 'integer', minimum: 1, maximum: 4 },
+                year: { type: 'integer' },
+              },
+              required: ['type', 'quarter', 'year'],
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                type: { enum: ['year'] },
+                year: { type: 'integer' },
+              },
+              required: ['type', 'year'],
+            },
+          ],
         },
       },
       required: ['time'],
@@ -94,10 +176,12 @@ export const buildSearchPlanPrompt = (params: {
     '3) Do NOT output any filters other than filters.time. The server injects user_id/category_id/post_id.',
     '   - Your job: decide top_k, threshold, sort, limit; and optionally rewrites/keywords/hybrid only.',
     '4) Mode must follow constraints: if post_id exists, use mode="post"; otherwise use mode="rag".',
-    '5) Time MUST be provided via a label only: filters.time = { "type": "label", "label": "..." }',
-    '   - Allowed labels (examples): "all_time"(no filter), "today", "yesterday", "last_7_days", "last_14_days", "last_30_days", "this_month", "last_month",',
-    '     or structured: "2006_to_now", "2019-2022", "2024-Q3", "Q3-2024", "2024-09", "2024".',
-    '   - For queries like "최근 글", prefer a short window label such as "last_7_days" or "last_30_days" (choose appropriately).',
+    '5) Time MUST be specified via filters.time using one of the supported shapes: label, named preset, relative window, absolute ISO range, month, quarter, or year.',
+    '   - Example labels: "2006_to_now", "2019-2022", "2024-Q3", "Q3-2024", "2024-09", "2024".',
+    '   - Example named presets: today, last_7_days, this_month, last_month, all.',
+    '   - Relative windows: { "type": "relative", "unit": "week", "value": 2 } covers the last 2 weeks including today.',
+    '   - Absolute windows must include ISO strings (UTC): { "type": "absolute", "from": "...", "to": "..." }.',
+    '   - Month/Quarter types may include a year field; omit it to default to the current KST year.',
     '6) Do NOT include any temporal words or ranges inside rewrites/keywords. Temporal intent must live ONLY in filters.time.',
     '7) If the question asks for N items (e.g., “N개”), set limit=N within bounds.',
     '8) Keep weights to defaults unless a clear need implies otherwise.',
