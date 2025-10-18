@@ -19,6 +19,8 @@ const configSchema = z.object({
   GEMINI_THINKING_BUDGET: z.string().optional(),
   LLM_COST_LOG: z.string().default('false'),
   LLM_COST_ROUND: z.coerce.number().default(4),
+  DEBUG_ALL: z.string().default('false'),
+  DEBUG_CHANNELS: z.string().default(''),
 });
 
 const config = configSchema.parse(process.env);

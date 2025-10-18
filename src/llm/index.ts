@@ -7,6 +7,7 @@ import { countChatMessagesTokens, countTextTokens } from '../utils/tokenizer';
 import { calcCost, getModelPricing } from '../utils/cost';
 import config from '../config';
 import { randomUUID } from 'crypto';
+import { DebugLogger } from '../utils/debug-logger';
 
 export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
   const merged = { ...req };
@@ -44,7 +45,7 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
       categoryId: merged.meta?.categoryId,
       postId: merged.meta?.postId,
     };
-    console.log(JSON.stringify(pre));
+    DebugLogger.log('llm', pre);
   }
 
   const startedAt = Date.now();
@@ -69,9 +70,7 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
 
   // Debug: start info
   try {
-    console.log(
-      JSON.stringify({ type: 'debug.llm.start', provider, model, messages: (messages || []).length })
-    );
+    DebugLogger.log('llm', { type: 'debug.llm.start', provider, model, messages: (messages || []).length });
   } catch {}
 
   const flushBuffer = () => {
@@ -135,25 +134,25 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
         totalCost,
         durationMs,
       };
-      console.log(JSON.stringify(post));
+      DebugLogger.log('llm', post);
     }
     try {
-      console.log(
-        JSON.stringify({ type: 'debug.llm.end', provider, model, durationMs, outputChars: outputText.length })
-      );
+      DebugLogger.log('llm', {
+        type: 'debug.llm.end',
+        provider,
+        model,
+        durationMs,
+        outputChars: outputText.length,
+      });
     } catch {}
     outer.end();
   });
   providerStream.on('error', (e) => {
     if (doLog) {
-      console.log(
-        JSON.stringify({ type: 'llm.error', corrId, provider, model, message: (e as any)?.message || 'error' })
-      );
+      DebugLogger.log('llm', { type: 'llm.error', corrId, provider, model, message: (e as any)?.message || 'error' });
     }
     try {
-      console.error(
-        JSON.stringify({ type: 'debug.llm.error', provider, model, message: (e as any)?.message || 'error' })
-      );
+      DebugLogger.error('llm', { type: 'debug.llm.error', provider, model, message: (e as any)?.message || 'error' });
     } catch {}
     outer.emit('error', e);
   });

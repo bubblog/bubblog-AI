@@ -2,6 +2,7 @@ import { createEmbeddings } from './embedding.service';
 import { getPreset } from './retrieval-presets';
 import * as postRepository from '../repositories/post.repository';
 import { SearchPlan } from '../types/ai.v2.types';
+import { DebugLogger } from '../utils/debug-logger';
 
 export type HybridSearchResult = {
   postId: string;
@@ -84,22 +85,14 @@ export const runHybridSearch = async (
   }
 
   // Telemetry: rewrite weights
-  try {
-    console.log(
-      JSON.stringify(
-        {
-          type: 'debug.hybrid.rewrite_weights',
-          rewrites,
-          weights: weightsByIndex.slice(1),
-          kept: keepIndex.slice(1),
-          decl_flags: rewrites.map((r) => isDeclarative(r)),
-          alpha,
-        },
-        null,
-        0,
-      ),
-    );
-  } catch {}
+  DebugLogger.log('hybrid', {
+    type: 'debug.hybrid.rewrite_weights',
+    rewrites,
+    weights: weightsByIndex.slice(1),
+    kept: keepIndex.slice(1),
+    decl_flags: rewrites.map((r) => isDeclarative(r)),
+    alpha,
+  });
 
   const byKey = new Map<string, Candidate>();
 
@@ -232,22 +225,14 @@ export const runHybridSearch = async (
   });
 
   // Telemetry for boosts
-  try {
-    console.log(
-      JSON.stringify(
-        {
-          type: 'debug.hybrid.boosts',
-          bias,
-          alpha,
-          sem_thr: preset.sem_boost_threshold,
-          lex_thr: preset.lex_boost_threshold,
-          counts: { sem: semBoostCount, lex: lexBoostCount },
-        },
-        null,
-        0,
-      ),
-    );
-  } catch {}
+  DebugLogger.log('hybrid', {
+    type: 'debug.hybrid.boosts',
+    bias,
+    alpha,
+    sem_thr: preset.sem_boost_threshold,
+    lex_thr: preset.lex_boost_threshold,
+    counts: { sem: semBoostCount, lex: lexBoostCount },
+  });
 
   // Post-level diversity: max N chunks per post before final limit
   const MAX_CHUNKS_PER_POST = 2;

@@ -5,6 +5,7 @@ import * as postRepository from '../repositories/post.repository';
 import * as personaRepository from '../repositories/persona.repository';
 import * as qaPrompts from '../prompts/qa.prompts';
 import { generate } from '../llm';
+import { DebugLogger } from '../utils/debug-logger';
 
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -38,11 +39,15 @@ export const answerStream = async (
   llm?: LlmOverride
 ): Promise<PassThrough> => {
   const stream = new PassThrough();
-  try {
-    console.log(
-      JSON.stringify({ type: 'debug.qa.start', questionLen: question?.length || 0, userId, categoryId, postId, speechTone, llm })
-    );
-  } catch {}
+  DebugLogger.log('qa', {
+    type: 'debug.qa.start',
+    questionLen: question?.length || 0,
+    userId,
+    categoryId,
+    postId,
+    speechTone,
+    llm,
+  });
 
   let messages: { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] = [];
   let tools:
@@ -69,7 +74,7 @@ export const answerStream = async (
       if (!post) {
         stream.write(`event: error\ndata: ${JSON.stringify({ code: 404, message: 'Post not found' })}\n\n`);
         stream.end();
-        try { console.warn(JSON.stringify({ type: 'debug.qa.post', status: 'not_found', postId })); } catch {}
+        DebugLogger.warn('qa', { type: 'debug.qa.post', status: 'not_found', postId });
         return;
       }
       
@@ -78,18 +83,19 @@ export const answerStream = async (
         stream.write(`event: error\n`);
         stream.write(`data: ${JSON.stringify({ code: 403, message: 'Forbidden' })}\n\n`);
         stream.end();
-        try { console.warn(JSON.stringify({ type: 'debug.qa.post', status: 'forbidden', postId })); } catch {}
+        DebugLogger.warn('qa', { type: 'debug.qa.post', status: 'forbidden', postId });
         return;
       }
 
       const processedContent = preprocessContent(post.content);
       stream.write(`event: exist_in_post_status\ndata: true\n\n`);
       stream.write(`event: context\ndata: ${JSON.stringify([{ postId: post.id, postTitle: post.title }])}\n\n`);
-      try {
-        console.log(
-          JSON.stringify({ type: 'debug.qa.path', mode: 'post', postId: post.id, processedLen: processedContent.length })
-        );
-      } catch {}
+      DebugLogger.log('qa', {
+        type: 'debug.qa.path',
+        mode: 'post',
+        postId: post.id,
+        processedLen: processedContent.length,
+      });
 
       messages = toSimpleMessages(
         qaPrompts.createPostContextPrompt(post, processedContent, question, speechTonePrompt)
@@ -104,15 +110,20 @@ export const answerStream = async (
 
       const context = similarChunks.map(chunk => ({ postId: chunk.postId, postTitle: chunk.postTitle }));
       stream.write(`event: context\ndata: ${JSON.stringify(context)}\n\n`);
-      try {
-        console.log(
-          JSON.stringify({ type: 'debug.qa.path', mode: 'rag', similarChunks: similarChunks.length, contextPreview: context.slice(0, 3) })
-        );
-      } catch {}
+      DebugLogger.log('qa', {
+        type: 'debug.qa.path',
+        mode: 'rag',
+        similarChunks: similarChunks.length,
+        contextPreview: context.slice(0, 3),
+      });
 
-      messages = toSimpleMessages(
-        qaPrompts.createRagPrompt(question, similarChunks, speechTonePrompt)
-      );
+      const ragChunks = similarChunks.map((chunk) => ({
+        postId: chunk.postId,
+        postTitle: chunk.postTitle,
+        postChunk: chunk.postChunk,
+        createdAt: (chunk as any).postCreatedAt ?? null,
+      }));
+      messages = toSimpleMessages(qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt));
       tools = [
           {
             type: "function",
@@ -139,38 +150,30 @@ export const answerStream = async (
       options: llm?.options,
       meta: { userId, categoryId, postId },
     });
-    try {
-      console.log(
-        JSON.stringify({
-          type: 'debug.qa.call',
-          provider: llm?.provider || 'openai',
-          model: llm?.model || config.CHAT_MODEL,
-          messages: messages.length,
-          tools: (tools || []).length,
-          hasOptions: !!llm?.options,
-        })
-      );
-    } catch {}
+    DebugLogger.log('qa', {
+      type: 'debug.qa.call',
+      provider: llm?.provider || 'openai',
+      model: llm?.model || config.CHAT_MODEL,
+      messages: messages.length,
+      tools: (tools || []).length,
+      hasOptions: !!llm?.options,
+    });
 
     llmStream.on('data', (chunk) => {
-      try {
-        const str = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-        console.log(
-          JSON.stringify({
-            type: 'debug.qa.chunk',
-            at: Date.now(),
-            bytes: Buffer.byteLength(str, 'utf8'),
-            preview: str.slice(0, 40).replace(/\n/g, '\\n'),
-          })
-        );
-      } catch {}
+      const str = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+      DebugLogger.log('qa', {
+        type: 'debug.qa.chunk',
+        at: Date.now(),
+        bytes: Buffer.byteLength(str, 'utf8'),
+        preview: str.slice(0, 40).replace(/\n/g, '\\n'),
+      });
       stream.write(chunk);
     });
     llmStream.on('end', () => {
       stream.end();
     });
     llmStream.on('error', (e) => {
-      try { console.error(JSON.stringify({ type: 'debug.qa.llmError', message: (e as any)?.message || 'error' })); } catch {}
+      DebugLogger.error('qa', { type: 'debug.qa.llmError', message: (e as any)?.message || 'error' });
     });
 
   })().catch(err => {

@@ -2,6 +2,7 @@ import { PassThrough } from 'stream';
 import OpenAI from 'openai';
 import config from '../../config';
 import { GenerateRequest, OpenAIStyleMessage, OpenAIStyleTool } from '../types';
+import { DebugLogger } from '../../utils/debug-logger';
 
 const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
@@ -53,23 +54,19 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
   const isGpt5Family = /(^|\b)gpt-5/i.test(model);
 
   // Debug: basic call info
-  try {
-    console.log(
-      JSON.stringify({
-        type: 'debug.openai.start',
-        model,
-        isGpt5Family,
-        hasTools: Array.isArray(req.tools) && req.tools.length > 0,
-        options: {
-          temperature: req.options?.temperature,
-          top_p: req.options?.top_p,
-          max_output_tokens: req.options?.max_output_tokens,
-          reasoning_effort: (req as any)?.options?.reasoning_effort,
-          text_verbosity: (req as any)?.options?.text_verbosity,
-        },
-      })
-    );
-  } catch {}
+  DebugLogger.log('openai', {
+    type: 'debug.openai.start',
+    model,
+    isGpt5Family,
+    hasTools: Array.isArray(req.tools) && req.tools.length > 0,
+    options: {
+      temperature: req.options?.temperature,
+      top_p: req.options?.top_p,
+      max_output_tokens: req.options?.max_output_tokens,
+      reasoning_effort: (req as any)?.options?.reasoning_effort,
+      text_verbosity: (req as any)?.options?.text_verbosity,
+    },
+  });
 
   try {
     if (isGpt5Family) {
@@ -94,11 +91,11 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           // Encourage text output on GPT-5 if not specified
           respParams.text = { verbosity: 'low' };
         }
-        try {
-          console.log(
-            JSON.stringify({ type: 'debug.openai.path', path: 'responses.stream', paramsKeys: Object.keys(respParams) })
-          );
-        } catch {}
+        DebugLogger.log('openai', {
+          type: 'debug.openai.path',
+          path: 'responses.stream',
+          paramsKeys: Object.keys(respParams),
+        });
         const responsesStream: any = await (openai as any).responses.stream(respParams);
 
         // let loggedFirstDelta = false;
@@ -153,11 +150,13 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
               safeWrite(`data: ${JSON.stringify(m.delta)}\n\n`);
             }
             // Log for visibility
-            console.log(
-              JSON.stringify({ type: 'debug.openai.msg', mtype: m.type, keys: Object.keys(m || {}) })
-            );
+            DebugLogger.log('openai', {
+              type: 'debug.openai.msg',
+              mtype: m.type,
+              keys: Object.keys(m || {}),
+            });
           } catch (e) {
-            try { console.log(JSON.stringify({ type: 'debug.openai.msg_parse_error' })); } catch {}
+            DebugLogger.log('openai', { type: 'debug.openai.msg_parse_error' });
           }
         });
 
@@ -165,18 +164,18 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           safeWrite(`event: end\n`);
           safeWrite(`data: [DONE]\n\n`);
           safeEnd();
-          try { console.log(JSON.stringify({ type: 'debug.openai.completed' })); } catch {}
+          DebugLogger.log('openai', { type: 'debug.openai.completed' });
         });
 
         responsesStream.on('error', (e: any) => {
           safeWrite(`event: error\n`);
           safeWrite(`data: ${JSON.stringify({ message: 'Internal server error' })}\n\n`);
           safeEnd();
-          try {
-            console.error(
-              JSON.stringify({ type: 'debug.openai.error', path: 'responses.stream', message: (e as any)?.message })
-            );
-          } catch {}
+          DebugLogger.error('openai', {
+            type: 'debug.openai.error',
+            path: 'responses.stream',
+            message: (e as any)?.message,
+          });
         });
 
         // Do not await completion here; return immediately so callers can consume deltas in real-time
@@ -198,11 +197,11 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           if (req.options?.reasoning_effort) createParams.reasoning = { effort: req.options.reasoning_effort };
           else createParams.reasoning = { effort: 'low' };
           if (req.options?.text_verbosity) createParams.text = { verbosity: req.options.text_verbosity };
-          try {
-            console.log(
-              JSON.stringify({ type: 'debug.openai.path', path: 'responses.create', paramsKeys: Object.keys(createParams) })
-            );
-          } catch {}
+          DebugLogger.log('openai', {
+            type: 'debug.openai.path',
+            path: 'responses.create',
+            paramsKeys: Object.keys(createParams),
+          });
           const response = await openai.responses.create(createParams);
           const text = (response as any).output_text ?? '';
           const answerText = typeof text === 'string' ? text : '';
@@ -235,17 +234,17 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           return stream;
         } catch (e2) {
           // fall through to chat completions streaming below
-          try {
-            console.error(
-              JSON.stringify({ type: 'debug.openai.error', path: 'responses.create', message: (e2 as any)?.message })
-            );
-          } catch {}
+          DebugLogger.error('openai', {
+            type: 'debug.openai.error',
+            path: 'responses.create',
+            message: (e2 as any)?.message,
+          });
         }
       }
     }
 
     // Chat Completions streaming as universal fallback
-    try { console.log(JSON.stringify({ type: 'debug.openai.path', path: 'chat.completions.stream' })); } catch {}
+    DebugLogger.log('openai', { type: 'debug.openai.path', path: 'chat.completions.stream' });
     let chatStream: any;
 
     // temperature/top_p are not supported on reasoning models (e.g., GPT-5 family)
@@ -294,7 +293,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
             safeWrite(`event: end\n`);
             safeWrite(`data: [DONE]\n\n`);
             safeEnd();
-            try { console.log(JSON.stringify({ type: 'debug.openai.completed', path: 'chat.completions.stream' })); } catch {}
+            DebugLogger.log('openai', { type: 'debug.openai.completed', path: 'chat.completions.stream' });
             break;
           }
         }
@@ -310,11 +309,13 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
     safeWrite(`event: error\n`);
     safeWrite(`data: ${JSON.stringify({ message: 'Internal server error' })}\n\n`);
     safeEnd();
-    try {
-      console.error(
-        JSON.stringify({ type: 'debug.openai.error', path: 'top', message: (err as any)?.message, model, isGpt5Family })
-      );
-    } catch {}
+    DebugLogger.error('openai', {
+      type: 'debug.openai.error',
+      path: 'top',
+      message: (err as any)?.message,
+      model,
+      isGpt5Family,
+    });
     return stream;
   }
 };

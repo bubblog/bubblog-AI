@@ -8,6 +8,7 @@ import { generateSearchPlan } from './search-plan.service';
 import { runSemanticSearch } from './semantic-search.service';
 import { runHybridSearch } from './hybrid-search.service';
 import { createEmbeddings } from './embedding.service';
+import { DebugLogger } from '../utils/debug-logger';
 
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -110,9 +111,13 @@ export const answerStreamV2 = async (
         stream.write(`event: context\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
 
-        messages = toSimpleMessages(
-          qaPrompts.createRagPrompt(question, similarChunks, speechTonePrompt)
-        );
+        const ragChunks = similarChunks.map((c) => ({
+          postId: c.postId,
+          postTitle: c.postTitle,
+          postChunk: c.postChunk,
+          createdAt: (c as any).postCreatedAt ?? null,
+        }));
+        messages = toSimpleMessages(qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt));
         if (similarChunks.length === 0) {
           tools = undefined;
         } else {
@@ -142,33 +147,32 @@ export const answerStreamV2 = async (
         stream.write(`event: search_plan\n`);
         stream.write(`data: ${JSON.stringify(plan)}\n\n`);
         // Console debug for emitted search plan
-        try {
-          console.log(
-            JSON.stringify(
-              {
-                type: 'debug.sse.search_plan',
-                userId,
-                categoryId,
-                plan_summary: {
-                  mode: plan.mode,
-                  top_k: plan.top_k,
-                  threshold: plan.threshold,
-                  weights: plan.weights,
-                  sort: plan.sort,
-                  limit: plan.limit,
-                  hybrid: plan.hybrid,
-                  time: plan?.filters?.time || null,
-                  rewrites_len: Array.isArray(plan.rewrites) ? plan.rewrites.length : 0,
-                  keywords_len: Array.isArray(plan.keywords) ? plan.keywords.length : 0,
-                },
-              },
-              null,
-              0,
-            ),
-          );
-        } catch {}
+        DebugLogger.log('sse', {
+          type: 'debug.sse.search_plan',
+          userId,
+          categoryId,
+          plan_summary: {
+            mode: plan.mode,
+            top_k: plan.top_k,
+            threshold: plan.threshold,
+            weights: plan.weights,
+            sort: plan.sort,
+            limit: plan.limit,
+            hybrid: plan.hybrid,
+            time: plan?.filters?.time || null,
+            rewrites_len: Array.isArray(plan.rewrites) ? plan.rewrites.length : 0,
+            keywords_len: Array.isArray(plan.keywords) ? plan.keywords.length : 0,
+          },
+        });
 
-        let rows: { postId: string; postTitle: string; postChunk: string; similarityScore: number }[] = [];
+        let rows: {
+          postId: string;
+          postTitle: string;
+          postChunk: string;
+          similarityScore: number;
+          postCreatedAt?: string;
+          chunkIndex?: number;
+        }[] = [];
         if (plan.hybrid?.enabled) {
           if (Array.isArray(plan.rewrites) && plan.rewrites.length > 0) {
             stream.write(`event: rewrite\n`);
@@ -194,7 +198,6 @@ export const answerStreamV2 = async (
               postTitle: r.postTitle,
               chunkIndex: (r as any).chunkIndex ?? null,
               createdAt: (r as any).postCreatedAt ?? null,
-              score: r.similarityScore,
             }));
             stream.write(`event: hybrid_result_meta\n`);
             stream.write(`data: ${JSON.stringify(hybridMeta)}\n\n`);
@@ -217,7 +220,6 @@ export const answerStreamV2 = async (
             postTitle: r.postTitle,
             chunkIndex: (r as any).chunkIndex ?? null,
             createdAt: (r as any).postCreatedAt ?? null,
-            score: r.similarityScore,
           }));
           stream.write(`event: search_result_meta\n`);
           stream.write(`data: ${JSON.stringify(resultMeta)}\n\n`);
@@ -227,18 +229,13 @@ export const answerStreamV2 = async (
         stream.write(`event: context\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
 
-        messages = toSimpleMessages(
-          qaPrompts.createRagPrompt(
-            question,
-            rows.map((r) => ({
-              postId: r.postId,
-              postTitle: r.postTitle,
-              postChunk: r.postChunk,
-              similarityScore: r.similarityScore,
-            })) as any,
-            speechTonePrompt
-          )
-        );
+        const planChunks = rows.map((r) => ({
+          postId: r.postId,
+          postTitle: r.postTitle,
+          postChunk: r.postChunk,
+          createdAt: r.postCreatedAt ?? null,
+        }));
+        messages = toSimpleMessages(qaPrompts.createRagPrompt(question, planChunks, speechTonePrompt));
         // If no context was found, avoid tool-calls to force direct natural-language guidance
         if (rows.length === 0) {
           tools = undefined;
