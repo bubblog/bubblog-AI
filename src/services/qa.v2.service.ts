@@ -117,31 +117,15 @@ export const answerStreamV2 = async (
           postChunk: c.postChunk,
           createdAt: (c as any).postCreatedAt ?? null,
         }));
-        messages = toSimpleMessages(qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt));
-        if (similarChunks.length === 0) {
-          tools = undefined;
-        } else {
-          tools = [
-            {
-              type: 'function',
-              function: {
-                name: 'report_content_insufficient',
-                description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    text: {
-                      type: 'string',
-                      description:
-                        '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
-                    },
-                  },
-                  required: ['text'],
-                },
-              },
+        messages = toSimpleMessages(
+          qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt, {
+            retrievalMeta: {
+              strategy: '임베딩 기반 RAG (검색 계획 생성 실패 폴백)',
+              resultCount: similarChunks.length,
+              notes: ['검색 계획 생성 실패로 기본 임베딩 검색을 사용했습니다.'],
             },
-          ];
-        }
+          })
+        );
       } else {
         const plan: any = planPair.normalized;
         stream.write(`event: search_plan\n`);
@@ -235,32 +219,17 @@ export const answerStreamV2 = async (
           postChunk: r.postChunk,
           createdAt: r.postCreatedAt ?? null,
         }));
-        messages = toSimpleMessages(qaPrompts.createRagPrompt(question, planChunks, speechTonePrompt));
-        // If no context was found, avoid tool-calls to force direct natural-language guidance
-        if (rows.length === 0) {
-          tools = undefined;
-        } else {
-          tools = [
-            {
-              type: 'function',
-              function: {
-                name: 'report_content_insufficient',
-                description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    text: {
-                      type: 'string',
-                      description:
-                        '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
-                    },
-                  },
-                  required: ['text'],
-                },
-              },
+        messages = toSimpleMessages(
+          qaPrompts.createRagPrompt(question, planChunks, speechTonePrompt, {
+            retrievalMeta: {
+              strategy: plan.hybrid?.enabled
+                ? `검색 계획 기반 하이브리드 (${plan.hybrid.retrieval_bias || 'balanced'})`
+                : '검색 계획 기반 임베딩',
+              plan,
+              resultCount: rows.length,
             },
-          ];
-        }
+          })
+        );
       }
     }
 

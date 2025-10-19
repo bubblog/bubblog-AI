@@ -123,23 +123,16 @@ export const answerStream = async (
         postChunk: chunk.postChunk,
         createdAt: (chunk as any).postCreatedAt ?? null,
       }));
-      messages = toSimpleMessages(qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt));
-      tools = [
-          {
-            type: "function",
-            function: {
-              name: "report_content_insufficient",
-              description: "카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출",
-              parameters: {
-                type: "object",
-                properties: {
-                  text: { type: "string", description: "답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다." },
-                },
-                required: ["text"],
-              },
-            },
+      messages = toSimpleMessages(
+        qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt, {
+          retrievalMeta: {
+            strategy: categoryId
+              ? `임베딩 기반 RAG (카테고리 ${categoryId})`
+              : '임베딩 기반 RAG',
+            resultCount: similarChunks.length,
           },
-      ];
+        })
+      );
     }
 
     const llmStream = await generate({
