@@ -4,6 +4,7 @@ import config from '../config';
 import * as qaPrompts from '../prompts/qa.prompts';
 import * as postRepository from '../repositories/post.repository';
 import * as personaRepository from '../repositories/persona.repository';
+import * as userRepository from '../repositories/user.repository';
 import { generateSearchPlan } from './search-plan.service';
 import { runSemanticSearch } from './semantic-search.service';
 import { runHybridSearch } from './hybrid-search.service';
@@ -42,7 +43,10 @@ export const answerStreamV2 = async (
   const stream = new PassThrough();
 
   (async () => {
-    const speechTonePrompt = await getSpeechTonePrompt(speechTone, userId);
+    const [speechTonePrompt, blogMeta] = await Promise.all([
+      getSpeechTonePrompt(speechTone, userId),
+      userRepository.findUserBlogMetadata(userId),
+    ]);
 
     let messages: { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] = [];
     let tools:
@@ -92,7 +96,7 @@ export const answerStreamV2 = async (
       stream.write(`data: ${JSON.stringify(ctx)}\n\n`);
 
       messages = toSimpleMessages(
-        qaPrompts.createPostContextPrompt(post, processed, question, speechTonePrompt)
+        qaPrompts.createPostContextPrompt(post, processed, question, speechTonePrompt, blogMeta ?? undefined)
       );
     } else {
       // Plan generation
@@ -124,6 +128,7 @@ export const answerStreamV2 = async (
               resultCount: similarChunks.length,
               notes: ['검색 계획 생성 실패로 기본 임베딩 검색을 사용했습니다.'],
             },
+            blogMeta: blogMeta ?? undefined,
           })
         );
       } else {
@@ -228,6 +233,7 @@ export const answerStreamV2 = async (
               plan,
               resultCount: rows.length,
             },
+            blogMeta: blogMeta ?? undefined,
           })
         );
       }

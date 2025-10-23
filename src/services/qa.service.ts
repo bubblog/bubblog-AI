@@ -6,6 +6,7 @@ import * as personaRepository from '../repositories/persona.repository';
 import * as qaPrompts from '../prompts/qa.prompts';
 import { generate } from '../llm';
 import { DebugLogger } from '../utils/debug-logger';
+import * as userRepository from '../repositories/user.repository';
 
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -58,7 +59,10 @@ export const answerStream = async (
     | undefined = undefined;
 
   (async () => {
-    const speechTonePrompt = await getSpeechTonePrompt(speechTone, userId);
+    const [speechTonePrompt, blogMeta] = await Promise.all([
+      getSpeechTonePrompt(speechTone, userId),
+      userRepository.findUserBlogMetadata(userId),
+    ]);
     const toSimpleMessages = (
       raw: any[]
     ): { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] => {
@@ -98,7 +102,7 @@ export const answerStream = async (
       });
 
       messages = toSimpleMessages(
-        qaPrompts.createPostContextPrompt(post, processedContent, question, speechTonePrompt)
+        qaPrompts.createPostContextPrompt(post, processedContent, question, speechTonePrompt, blogMeta ?? undefined)
       );
 
     } else {
@@ -131,6 +135,7 @@ export const answerStream = async (
               : '임베딩 기반 RAG',
             resultCount: similarChunks.length,
           },
+          blogMeta: blogMeta ?? undefined,
         })
       );
     }
