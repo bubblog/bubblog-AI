@@ -129,3 +129,55 @@ npm run db:migrate:pgtrgm
 ```
 
 주의: 인덱스는 쓰기 비용과 디스크 사용량을 증가시킵니다. 텍스트 검색에 사용하는 컬럼(`post_chunks.content`, `blog_post.title`)에만 생성하세요.
+
+---
+
+## 6. Redis 기반 임베딩 워커
+
+임베딩 생성 작업을 Redis 큐에 적재한 뒤 Node.js 워커가 안전하게 처리하도록 구성할 수 있습니다.
+
+### 6.1 환경 변수
+
+`.env` 또는 배포 환경 변수를 통해 다음 값을 설정하세요 (필요 시 기본값 사용 가능).
+
+```env
+# Redis 연결 (예: 외부 매니지드 인스턴스)
+REDIS_URL=redis://username:password@your-redis-host:6379
+# 또는 REDIS_HOST/REDIS_PORT 조합 사용 (둘 중 하나만 설정)
+
+# 큐 이름
+EMBEDDING_QUEUE_KEY=embedding:queue
+EMBEDDING_FAILED_QUEUE_KEY=embedding:failed
+
+# 워커 재시도 설정 (선택)
+EMBEDDING_WORKER_MAX_RETRIES=3
+EMBEDDING_WORKER_BACKOFF_MS=5000
+```
+
+### 6.2 로컬 실행
+
+```bash
+npm run build               # TypeScript 컴파일
+npm run start               # Express API
+npm run worker              # 프로덕션 워커 (빌드 후)
+# 또는 개발용 실시간 실행
+npm run worker:dev
+```
+
+### 6.3 Docker Compose
+
+`docker-compose.yml` 에는 API와 워커 서비스가 정의되어 있습니다. 외부 Redis 에 접속하도록 `.env` 의 `REDIS_URL` 을 설정한 뒤 아래 명령으로 기동하세요.
+
+```bash
+docker compose up --build
+```
+
+로컬에서 자체 Redis 컨테이너가 필요하다면 compose 파일에 Redis 서비스를 별도로 추가한 뒤 `REDIS_URL` 또는 `REDIS_HOST/PORT` 를 해당 컨테이너로 지정하세요.
+
+필요 시 워커만 스케일링할 수도 있습니다.
+
+```bash
+docker compose up --build --scale worker=3
+```
+
+Redis 큐 상태는 `redis-cli` 또는 `LLEN embedding:queue` 같은 명령으로 확인하세요.

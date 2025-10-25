@@ -21,6 +21,13 @@ const configSchema = z.object({
   LLM_COST_ROUND: z.coerce.number().default(4),
   DEBUG_ALL: z.string().default('false'),
   DEBUG_CHANNELS: z.string().default(''),
+  REDIS_URL: z.string().optional(),
+  REDIS_HOST: z.string().default('127.0.0.1'),
+  REDIS_PORT: z.coerce.number().default(6379),
+  EMBEDDING_QUEUE_KEY: z.string().default('embedding:queue'),
+  EMBEDDING_FAILED_QUEUE_KEY: z.string().default('embedding:failed'),
+  EMBEDDING_WORKER_MAX_RETRIES: z.coerce.number().default(3),
+  EMBEDDING_WORKER_BACKOFF_MS: z.coerce.number().default(5000),
 });
 
 const config = configSchema.parse(process.env);

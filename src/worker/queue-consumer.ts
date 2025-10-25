@@ -1,0 +1,198 @@
+import Redis from 'ioredis';
+import config from '../config';
+import {
+  chunkText,
+  createEmbeddings,
+  storeContentEmbeddings,
+  storeTitleEmbedding,
+} from '../services/embedding.service';
+import { DebugLogger } from '../utils/debug-logger';
+
+type EmbeddingJob = {
+  postId: number;
+  title?: string | null;
+  content?: string | null;
+  attempt?: number;
+  metadata?: Record<string, unknown>;
+};
+
+const queueKey = config.EMBEDDING_QUEUE_KEY;
+const failedQueueKey = config.EMBEDDING_FAILED_QUEUE_KEY;
+const maxRetries = config.EMBEDDING_WORKER_MAX_RETRIES;
+const backoffMs = Math.max(0, config.EMBEDDING_WORKER_BACKOFF_MS || 0);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const redis =
+  config.REDIS_URL && config.REDIS_URL.length > 0
+    ? new Redis(config.REDIS_URL)
+    : new Redis({
+        host: config.REDIS_HOST,
+        port: config.REDIS_PORT,
+      });
+
+let shuttingDown = false;
+
+const handleShutdown = (signal: NodeJS.Signals) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  DebugLogger.warn('server', { type: 'worker.shutdown', signal });
+  try {
+    redis.disconnect();
+  } catch {
+    // ignore
+  }
+  setTimeout(() => process.exit(0), 500).unref();
+};
+
+process.on('SIGINT', handleShutdown);
+process.on('SIGTERM', handleShutdown);
+
+const processJob = async (job: EmbeddingJob) => {
+  const postId = Number(job.postId);
+  if (!Number.isFinite(postId) || postId <= 0) {
+    throw new Error('Invalid postId in embedding job');
+  }
+
+  const title = typeof job.title === 'string' ? job.title.trim() : '';
+  const content = typeof job.content === 'string' ? job.content.trim() : '';
+
+  if (!title && !content) {
+    DebugLogger.warn('server', {
+      type: 'worker.job.skipped',
+      postId,
+      reason: 'empty_payload',
+    });
+    return;
+  }
+
+  if (title) {
+    await storeTitleEmbedding(postId, title);
+  }
+
+  if (content) {
+    const chunks = chunkText(content);
+
+    if (!chunks.length) {
+      DebugLogger.warn('server', {
+        type: 'worker.job.skipped',
+        postId,
+        reason: 'no_chunks',
+      });
+      return;
+    }
+
+    const embeddings = await createEmbeddings(chunks);
+    await storeContentEmbeddings(postId, chunks, embeddings);
+  }
+};
+
+const pushToFailedQueue = async (payload: unknown) => {
+  try {
+    await redis.lpush(
+      failedQueueKey,
+      JSON.stringify({
+        failedAt: new Date().toISOString(),
+        payload,
+      })
+    );
+  } catch (error) {
+    DebugLogger.error('server', {
+      type: 'worker.failed_queue_error',
+      message: (error as Error)?.message ?? 'unknown',
+    });
+  }
+};
+
+const handlePayload = async (rawPayload: string) => {
+  let job: EmbeddingJob;
+  try {
+    job = JSON.parse(rawPayload) as EmbeddingJob;
+  } catch (error) {
+    DebugLogger.error('server', {
+      type: 'worker.job.invalid_json',
+      error: (error as Error)?.message ?? 'invalid_json',
+    });
+    await pushToFailedQueue({ rawPayload, reason: 'invalid_json' });
+    return;
+  }
+
+  const attempt = Number(job.attempt || 0);
+  DebugLogger.log('server', {
+    type: 'worker.job.start',
+    postId: job.postId,
+    attempt,
+  });
+
+  try {
+    await processJob(job);
+    DebugLogger.log('server', {
+      type: 'worker.job.success',
+      postId: job.postId,
+    });
+  } catch (error) {
+    const errorMessage = (error as Error)?.message ?? 'unknown';
+    const nextAttempt = attempt + 1;
+    const enrichedPayload = {
+      ...job,
+      attempt: nextAttempt,
+      lastError: errorMessage,
+      failedAt: new Date().toISOString(),
+    };
+
+    if (nextAttempt < maxRetries) {
+      DebugLogger.warn('server', {
+        type: 'worker.job.retry',
+        postId: job.postId,
+        attempt: nextAttempt,
+        error: errorMessage,
+      });
+      if (backoffMs > 0) {
+        await sleep(Math.min(backoffMs * nextAttempt, backoffMs * 6));
+      }
+      await redis.lpush(queueKey, JSON.stringify(enrichedPayload));
+    } else {
+      DebugLogger.error('server', {
+        type: 'worker.job.failed',
+        postId: job.postId,
+        attempt: nextAttempt,
+        error: errorMessage,
+      });
+      await pushToFailedQueue(enrichedPayload);
+    }
+  }
+};
+
+const run = async () => {
+  DebugLogger.info('server', {
+    type: 'worker.start',
+    queueKey,
+    failedQueueKey,
+    maxRetries,
+  });
+
+  while (!shuttingDown) {
+    try {
+      const result = await redis.brpop(queueKey, 0);
+      if (!result || result.length < 2) continue;
+      const payload = result[1];
+      await handlePayload(payload);
+    } catch (error) {
+      if (shuttingDown) break;
+      DebugLogger.error('server', {
+        type: 'worker.loop_error',
+        message: (error as Error)?.message ?? 'unknown',
+      });
+      if (backoffMs > 0) {
+        await sleep(backoffMs);
+      }
+    }
+  }
+
+  DebugLogger.info('server', { type: 'worker.exit' });
+};
+
+run().catch((error) => {
+  console.error('[embedding-worker] fatal error:', error);
+  process.exit(1);
+});

@@ -41,6 +41,9 @@ jobs:
             docker stop bubblog-ai || true
             docker rm bubblog-ai || true
 
+            docker stop bubblog-ai-worker || true
+            docker rm bubblog-ai-worker || true
+
             docker pull $IMAGE_NAME:latest
 
             docker run -d --name bubblog-ai -p 8000:3000 \
@@ -51,4 +54,28 @@ jobs:
               -e ALGORITHM="${{ secrets.ALGORITHM }}" \
               -e EMBED_MODEL="${{ secrets.EMBED_MODEL }}" \
               -e CHAT_MODEL="${{ secrets.CHAT_MODEL }}" \
+              -e REDIS_URL="${{ secrets.REDIS_URL }}" \
+              -e REDIS_HOST="${{ secrets.REDIS_HOST }}" \
+              -e REDIS_PORT="${{ secrets.REDIS_PORT }}" \
+              -e EMBEDDING_QUEUE_KEY="${{ secrets.EMBEDDING_QUEUE_KEY }}" \
+              -e EMBEDDING_FAILED_QUEUE_KEY="${{ secrets.EMBEDDING_FAILED_QUEUE_KEY }}" \
+              -e EMBEDDING_WORKER_MAX_RETRIES="${{ secrets.EMBEDDING_WORKER_MAX_RETRIES }}" \
+              -e EMBEDDING_WORKER_BACKOFF_MS="${{ secrets.EMBEDDING_WORKER_BACKOFF_MS }}" \
               $IMAGE_NAME:latest
+
+            docker run -d --name bubblog-ai-worker \
+              -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+              -e TOKEN_AUDIENCE="${{ secrets.TOKEN_AUDIENCE }}" \
+              -e ALGORITHM="${{ secrets.ALGORITHM }}" \
+              -e EMBED_MODEL="${{ secrets.EMBED_MODEL }}" \
+              -e CHAT_MODEL="${{ secrets.CHAT_MODEL }}" \
+              -e REDIS_URL="${{ secrets.REDIS_URL }}" \
+              -e REDIS_HOST="${{ secrets.REDIS_HOST }}" \
+              -e REDIS_PORT="${{ secrets.REDIS_PORT }}" \
+              -e EMBEDDING_QUEUE_KEY="${{ secrets.EMBEDDING_QUEUE_KEY }}" \
+              -e EMBEDDING_FAILED_QUEUE_KEY="${{ secrets.EMBEDDING_FAILED_QUEUE_KEY }}" \
+              -e EMBEDDING_WORKER_MAX_RETRIES="${{ secrets.EMBEDDING_WORKER_MAX_RETRIES }}" \
+              -e EMBEDDING_WORKER_BACKOFF_MS="${{ secrets.EMBEDDING_WORKER_BACKOFF_MS }}" \
+              $IMAGE_NAME:latest node dist/worker/queue-consumer.js
