@@ -17,6 +17,19 @@ export interface SimilarChunk {
   postTitle: string;
   postChunk: string;
   similarityScore: number;
+  chunkIndex?: number;
+  postCreatedAt?: string;
+  postTags?: string[];
+}
+
+export interface TextSearchHit {
+  postId: string;
+  postTitle: string;
+  postChunk: string;
+  textScore: number;
+  chunkIndex?: number;
+  postCreatedAt?: string;
+  postTags?: string[];
 }
 
 export interface TextSearchHit {
@@ -214,6 +227,7 @@ export const findSimilarChunksV2 = async (params: {
       fp.post_id,
       fp.post_title,
       pc.content AS post_chunk,
+      pc.chunk_index AS chunk_index,
       (${wChunk} * (1.0 - (pc.embedding <=> $2))) + (${wTitle} * (1.0 - (pte.embedding <=> $2))) AS similarity_score,
       fp.created_at
     FROM filtered_posts fp
@@ -246,6 +260,9 @@ export const findSimilarChunksV2 = async (params: {
     postTitle: row.post_title,
     postChunk: row.post_chunk,
     similarityScore: row.similarity_score,
+    chunkIndex: row.chunk_index,
+    postCreatedAt: row.created_at,
+    postTags: [],
   }));
 };
 
@@ -297,6 +314,7 @@ export const textSearchChunksV2 = async (params: {
       fp.post_id,
       fp.post_title,
       pc.content AS post_chunk,
+      pc.chunk_index AS chunk_index,
       0::float8 AS content_sim,
       0::float8 AS title_sim,
       fp.created_at
@@ -310,6 +328,7 @@ export const textSearchChunksV2 = async (params: {
         fp.post_id,
         fp.post_title,
         pc.content AS post_chunk,
+        pc.chunk_index AS chunk_index,
         COALESCE(similarity(pc.content, $${qParam}), 0) AS content_sim,
         COALESCE(similarity(fp.post_title, $${qParam}), 0) AS title_sim,
         fp.created_at
@@ -357,5 +376,156 @@ LIMIT $${limitParam}`;
     postTitle: row.post_title,
     postChunk: row.post_chunk,
     textScore: Math.max(Number(row.content_sim) || 0, Number(row.title_sim) || 0),
+    chunkIndex: row.chunk_index,
+    postCreatedAt: row.created_at,
+    postTags: [],
+  }));
+};
+
+// ========= GLOBAL (no user/category filter) =========
+export const findSimilarChunksGlobalANN = async (params: {
+  embedding: number[];
+  threshold?: number; // applied on chunk similarity only
+  topK?: number; // final number to return
+  weights?: { chunk: number; title: number };
+  sort?: 'created_at_desc' | 'created_at_asc';
+  annFactor?: number; // multiplier for initial ANN candidates
+}): Promise<SimilarChunk[]> => {
+  const pool = getDb();
+  const wChunk = Math.max(0, Math.min(1, params.weights?.chunk ?? 0.7));
+  const wTitle = Math.max(0, Math.min(1, params.weights?.title ?? 0.3));
+  const thr = params.threshold != null ? Math.max(0, Math.min(1, params.threshold)) : 0.2;
+  const topK = Math.min(50, Math.max(1, params.topK ?? 5));
+  const factor = Math.min(20, Math.max(1, params.annFactor ?? 5));
+  const annLimit = Math.min(500, topK * factor);
+
+  const values: any[] = [];
+  values.push(pgvector.toSql(params.embedding)); // $1
+
+  const thrParam = values.length + 1; // $2
+  values.push(thr);
+
+  const annLimitParam = values.length + 1; // $3
+  values.push(annLimit);
+
+  const topKParam = values.length + 1; // $4
+  values.push(topK);
+
+  let orderBy = 'similarity_score DESC';
+  if (params.sort === 'created_at_desc') orderBy = 'similarity_score DESC, bp.created_at DESC';
+  if (params.sort === 'created_at_asc') orderBy = 'similarity_score DESC, bp.created_at ASC';
+
+  const sql = `
+    WITH nn AS (
+      SELECT pc.post_id, pc.chunk_index, pc.content, (pc.embedding <=> $1) AS dist
+      FROM post_chunks pc
+      ORDER BY pc.embedding <=> $1
+      LIMIT $${annLimitParam}
+    ),
+    scored AS (
+      SELECT
+        nn.post_id,
+        bp.title AS post_title,
+        nn.content AS post_chunk,
+        nn.chunk_index,
+        (${wChunk} * (1.0 - nn.dist)) + (${wTitle} * (1.0 - (pte.embedding <=> $1))) AS similarity_score,
+        bp.created_at
+      FROM nn
+      JOIN blog_post bp ON bp.id = nn.post_id
+      JOIN post_title_embeddings pte ON pte.post_id = nn.post_id
+      WHERE (1.0 - nn.dist) > $${thrParam}
+    )
+    SELECT * FROM scored
+    ORDER BY ${orderBy}
+    LIMIT $${topKParam}
+  `;
+
+  const { rows } = await pool.query(sql, values);
+  return rows.map((row) => ({
+    postId: row.post_id,
+    postTitle: row.post_title,
+    postChunk: row.post_chunk,
+    similarityScore: row.similarity_score,
+    chunkIndex: row.chunk_index,
+    postCreatedAt: row.created_at,
+    postTags: [],
+  }));
+};
+
+export const textSearchChunksGlobal = async (params: {
+  query?: string;
+  keywords?: string[];
+  topK?: number;
+  sort?: 'created_at_desc' | 'created_at_asc';
+}): Promise<TextSearchHit[]> => {
+  const pool = getDb();
+  const limit = Math.min(50, Math.max(1, params.topK ?? 5));
+
+  const values: any[] = [];
+
+  const hasQuery = !!params.query && params.query.trim().length > 0;
+  const keywords = (params.keywords || []).filter((k) => typeof k === 'string' && k.trim().length > 0);
+
+  let base = `
+    SELECT
+      bp.id AS post_id,
+      bp.title AS post_title,
+      pc.content AS post_chunk,
+      0::float8 AS content_sim,
+      0::float8 AS title_sim,
+      bp.created_at
+    FROM blog_post bp
+    JOIN post_chunks pc ON pc.post_id = bp.id
+  `;
+  if (hasQuery) {
+    const qParam = values.length + 1;
+    base = `
+      SELECT
+        bp.id AS post_id,
+        bp.title AS post_title,
+        pc.content AS post_chunk,
+        COALESCE(similarity(pc.content, $${qParam}), 0) AS content_sim,
+        COALESCE(similarity(bp.title, $${qParam}), 0) AS title_sim,
+        bp.created_at
+      FROM blog_post bp
+      JOIN post_chunks pc ON pc.post_id = bp.id
+    `;
+    values.push(params.query);
+  }
+
+  const whereParts: string[] = [];
+
+  const likePatterns: string[] = [];
+  for (const k of keywords) {
+    likePatterns.push(`%${k}%`);
+  }
+  if (likePatterns.length > 0) {
+    const arrParam = values.length + 1;
+    whereParts.push(`(pc.content ILIKE ANY($${arrParam}) OR bp.title ILIKE ANY($${arrParam}))`);
+    values.push(likePatterns);
+  }
+
+  const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+  let orderBy = 'content_sim DESC';
+  if (params.sort === 'created_at_desc') orderBy = 'content_sim DESC, bp.created_at DESC';
+  if (params.sort === 'created_at_asc') orderBy = 'content_sim DESC, bp.created_at ASC';
+
+  const limitParam = values.length + 1;
+  const sql = `${base}
+${whereSql}
+ORDER BY ${orderBy}
+LIMIT $${limitParam}`;
+  values.push(limit);
+
+  const { rows } = await pool.query(sql, values);
+  return rows.map((row) => ({
+    postId: row.post_id,
+    postTitle: row.post_title,
+    postChunk: row.post_chunk,
+    textScore: Math.max(Number(row.content_sim) || 0, Number(row.title_sim) || 0),
+    chunkIndex: undefined,
+    postCreatedAt: row.created_at,
+    postTags: [],
   }));
 };

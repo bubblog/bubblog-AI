@@ -4,10 +4,12 @@ import config from '../config';
 import * as qaPrompts from '../prompts/qa.prompts';
 import * as postRepository from '../repositories/post.repository';
 import * as personaRepository from '../repositories/persona.repository';
+import * as userRepository from '../repositories/user.repository';
 import { generateSearchPlan } from './search-plan.service';
 import { runSemanticSearch } from './semantic-search.service';
 import { runHybridSearch } from './hybrid-search.service';
 import { createEmbeddings } from './embedding.service';
+import { DebugLogger } from '../utils/debug-logger';
 
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -41,7 +43,10 @@ export const answerStreamV2 = async (
   const stream = new PassThrough();
 
   (async () => {
-    const speechTonePrompt = await getSpeechTonePrompt(speechTone, userId);
+    const [speechTonePrompt, blogMeta] = await Promise.all([
+      getSpeechTonePrompt(speechTone, userId),
+      userRepository.findUserBlogMetadata(userId),
+    ]);
 
     let messages: { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] = [];
     let tools:
@@ -91,7 +96,7 @@ export const answerStreamV2 = async (
       stream.write(`data: ${JSON.stringify(ctx)}\n\n`);
 
       messages = toSimpleMessages(
-        qaPrompts.createPostContextPrompt(post, processed, question, speechTonePrompt)
+        qaPrompts.createPostContextPrompt(post, processed, question, speechTonePrompt, blogMeta ?? undefined)
       );
     } else {
       // Plan generation
@@ -110,65 +115,53 @@ export const answerStreamV2 = async (
         stream.write(`event: context\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
 
+        const ragChunks = similarChunks.map((c) => ({
+          postId: c.postId,
+          postTitle: c.postTitle,
+          postChunk: c.postChunk,
+          createdAt: (c as any).postCreatedAt ?? null,
+        }));
         messages = toSimpleMessages(
-          qaPrompts.createRagPrompt(question, similarChunks, speechTonePrompt)
-        );
-        if (similarChunks.length === 0) {
-          tools = undefined;
-        } else {
-          tools = [
-            {
-              type: 'function',
-              function: {
-                name: 'report_content_insufficient',
-                description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    text: {
-                      type: 'string',
-                      description:
-                        '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
-                    },
-                  },
-                  required: ['text'],
-                },
-              },
+          qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt, {
+            retrievalMeta: {
+              strategy: '임베딩 기반 RAG (검색 계획 생성 실패 폴백)',
+              resultCount: similarChunks.length,
+              notes: ['검색 계획 생성 실패로 기본 임베딩 검색을 사용했습니다.'],
             },
-          ];
-        }
+            blogMeta: blogMeta ?? undefined,
+          })
+        );
       } else {
         const plan: any = planPair.normalized;
         stream.write(`event: search_plan\n`);
         stream.write(`data: ${JSON.stringify(plan)}\n\n`);
         // Console debug for emitted search plan
-        try {
-          console.log(
-            JSON.stringify(
-              {
-                type: 'debug.sse.search_plan',
-                userId,
-                categoryId,
-                plan_summary: {
-                  mode: plan.mode,
-                  top_k: plan.top_k,
-                  threshold: plan.threshold,
-                  weights: plan.weights,
-                  sort: plan.sort,
-                  limit: plan.limit,
-                  hybrid: plan.hybrid,
-                  time: plan?.filters?.time || null,
-                  rewrites_len: Array.isArray(plan.rewrites) ? plan.rewrites.length : 0,
-                  keywords_len: Array.isArray(plan.keywords) ? plan.keywords.length : 0,
-                },
-              },
-              null,
-              0,
-            ),
-          );
-        } catch {}
+        DebugLogger.log('sse', {
+          type: 'debug.sse.search_plan',
+          userId,
+          categoryId,
+          plan_summary: {
+            mode: plan.mode,
+            top_k: plan.top_k,
+            threshold: plan.threshold,
+            weights: plan.weights,
+            sort: plan.sort,
+            limit: plan.limit,
+            hybrid: plan.hybrid,
+            time: plan?.filters?.time || null,
+            rewrites_len: Array.isArray(plan.rewrites) ? plan.rewrites.length : 0,
+            keywords_len: Array.isArray(plan.keywords) ? plan.keywords.length : 0,
+          },
+        });
 
-        let rows: { postId: string; postTitle: string; postChunk: string; similarityScore: number }[] = [];
+        let rows: {
+          postId: string;
+          postTitle: string;
+          postChunk: string;
+          similarityScore: number;
+          postCreatedAt?: string;
+          chunkIndex?: number;
+        }[] = [];
         if (plan.hybrid?.enabled) {
           if (Array.isArray(plan.rewrites) && plan.rewrites.length > 0) {
             stream.write(`event: rewrite\n`);
@@ -181,64 +174,68 @@ export const answerStreamV2 = async (
           rows = await runHybridSearch(
             question,
             userId,
-            plan
+            plan,
+            { categoryId: categoryId ?? undefined, limit: plan.limit }
           );
           const hybridContext = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
           stream.write(`event: hybrid_result\n`);
           stream.write(`data: ${JSON.stringify(hybridContext)}\n\n`);
+          // Optional enriched metadata for clients that opt-in
+          try {
+            const hybridMeta = rows.map((r) => ({
+              postId: r.postId,
+              postTitle: r.postTitle,
+              chunkIndex: (r as any).chunkIndex ?? null,
+              createdAt: (r as any).postCreatedAt ?? null,
+            }));
+            stream.write(`event: hybrid_result_meta\n`);
+            stream.write(`data: ${JSON.stringify(hybridMeta)}\n\n`);
+          } catch {}
 
           if (!rows.length) {
-            rows = await runSemanticSearch(question, userId, plan);
+            rows = await runSemanticSearch(question, userId, plan, { categoryId: categoryId ?? undefined });
           }
         } else {
-          rows = await runSemanticSearch(question, userId, plan);
+          rows = await runSemanticSearch(question, userId, plan, { categoryId: categoryId ?? undefined });
         }
 
         const context = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
         stream.write(`event: search_result\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
+        // Optional enriched metadata for clients that opt-in
+        try {
+          const resultMeta = rows.map((r) => ({
+            postId: r.postId,
+            postTitle: r.postTitle,
+            chunkIndex: (r as any).chunkIndex ?? null,
+            createdAt: (r as any).postCreatedAt ?? null,
+          }));
+          stream.write(`event: search_result_meta\n`);
+          stream.write(`data: ${JSON.stringify(resultMeta)}\n\n`);
+        } catch {}
         stream.write(`event: exist_in_post_status\n`);
         stream.write(`data: ${JSON.stringify(rows.length > 0)}\n\n`);
         stream.write(`event: context\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
 
+        const planChunks = rows.map((r) => ({
+          postId: r.postId,
+          postTitle: r.postTitle,
+          postChunk: r.postChunk,
+          createdAt: r.postCreatedAt ?? null,
+        }));
         messages = toSimpleMessages(
-          qaPrompts.createRagPrompt(
-            question,
-            rows.map((r) => ({
-              postId: r.postId,
-              postTitle: r.postTitle,
-              postChunk: r.postChunk,
-              similarityScore: r.similarityScore,
-            })) as any,
-            speechTonePrompt
-          )
-        );
-        // If no context was found, avoid tool-calls to force direct natural-language guidance
-        if (rows.length === 0) {
-          tools = undefined;
-        } else {
-          tools = [
-            {
-              type: 'function',
-              function: {
-                name: 'report_content_insufficient',
-                description: '카테고리는 맞지만 본문 컨텍스트가 부족할 때 호출',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    text: {
-                      type: 'string',
-                      description:
-                        '답변 말투 및 규칙을 지켜 해당 내용이 아직 부족하다는 안내를 합니다. 그 후 본문 컨텍스트를 참고해 질문과 관련된 답변할 수 있는 내용을 언급하고 해당 내용에 대한 질문을 직접적으로 유도합니다.',
-                    },
-                  },
-                  required: ['text'],
-                },
-              },
+          qaPrompts.createRagPrompt(question, planChunks, speechTonePrompt, {
+            retrievalMeta: {
+              strategy: plan.hybrid?.enabled
+                ? `검색 계획 기반 하이브리드 (${plan.hybrid.retrieval_bias || 'balanced'})`
+                : '검색 계획 기반 임베딩',
+              plan,
+              resultCount: rows.length,
             },
-          ];
-        }
+            blogMeta: blogMeta ?? undefined,
+          })
+        );
       }
     }
 

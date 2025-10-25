@@ -2,7 +2,9 @@ import OpenAI from 'openai';
 import config from '../config';
 import { buildSearchPlanPrompt, getSearchPlanSchemaJson } from '../prompts/qa.v2.prompts';
 import { planSchema, type SearchPlan } from '../types/ai.v2.types';
+import { getPreset } from './retrieval-presets';
 import { nowUtc, toAbsoluteRangeKst } from '../utils/time';
+import { DebugLogger } from '../utils/debug-logger';
 
 const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
@@ -35,21 +37,13 @@ export const generateSearchPlan = async (
 
   try {
     // Debug prompt before request
-    try {
-      console.log(
-        JSON.stringify(
-          {
-            type: 'debug.plan.prompt',
-            model: 'gpt-5-mini',
-            prompt_len: prompt.length,
-            head: prompt.slice(0, 600),
-            tail: prompt.slice(Math.max(0, prompt.length - 600)),
-          },
-          null,
-          0,
-        ),
-      );
-    } catch {}
+    DebugLogger.log('plan', {
+      type: 'debug.plan.prompt',
+      model: 'gpt-5-mini',
+      prompt_len: prompt.length,
+      head: prompt.slice(0, 600),
+      tail: prompt.slice(Math.max(0, prompt.length - 600)),
+    });
 
     const response: any = await (openai as any).responses.create({
       model: 'gpt-5-mini',
@@ -72,13 +66,12 @@ export const generateSearchPlan = async (
         })),
       }));
       const outputText = (response as any)?.output_text;
-      console.log(
-        JSON.stringify(
-          { type: 'debug.plan.response.peek', has_output_text: !!outputText, output_text_len: typeof outputText === 'string' ? outputText.length : undefined, output_summary: outputSummary },
-          null,
-          0,
-        ),
-      );
+      DebugLogger.log('plan', {
+        type: 'debug.plan.response.peek',
+        has_output_text: !!outputText,
+        output_text_len: typeof outputText === 'string' ? outputText.length : undefined,
+        output_summary: outputSummary,
+      });
     } catch {}
 
     // Extract structured JSON if available, otherwise parse text
@@ -117,15 +110,7 @@ export const generateSearchPlan = async (
       } catch {}
       const raw = texts.join('').trim();
       // Debug: log raw text before JSON.parse
-      try {
-        console.log(
-          JSON.stringify(
-            { type: 'debug.plan.raw_text', len: raw.length, head: raw.slice(0, 200) },
-            null,
-            0,
-          ),
-        );
-      } catch {}
+      DebugLogger.log('plan', { type: 'debug.plan.raw_text', len: raw.length, head: raw.slice(0, 200) });
       if (!raw) {
         // Graceful fallback: unable to parse structured output
         return null;
@@ -169,7 +154,7 @@ export const generateSearchPlan = async (
       }
       if (!candidate) {
         try {
-          console.warn(JSON.stringify({ type: 'debug.plan.parse_fail', note: 'could not extract JSON from raw' }));
+          DebugLogger.warn('plan', { type: 'debug.plan.parse_fail', note: 'could not extract JSON from raw' });
         } catch {}
         return null;
       }
@@ -189,10 +174,19 @@ export const generateSearchPlan = async (
           const outputs = (response2 as any)?.output || [];
           const outputSummary = outputs.map((o: any) => ({
             role: o?.role,
-            content: (o?.content || []).map((c: any) => ({ type: c?.type, hasText: typeof c?.text === 'string', textLen: typeof c?.text === 'string' ? (c.text as string).length : undefined }))
+            content: (o?.content || []).map((c: any) => ({
+              type: c?.type,
+              hasText: typeof c?.text === 'string',
+              textLen: typeof c?.text === 'string' ? (c.text as string).length : undefined,
+            })),
           }));
           const outputText = (response2 as any)?.output_text;
-          console.log(JSON.stringify({ type: 'debug.plan.fallback.peek', has_output_text: !!outputText, output_text_len: typeof outputText === 'string' ? outputText.length : undefined, output_summary: outputSummary }));
+          DebugLogger.log('plan', {
+            type: 'debug.plan.fallback.peek',
+            has_output_text: !!outputText,
+            output_text_len: typeof outputText === 'string' ? outputText.length : undefined,
+            output_summary: outputSummary,
+          });
         } catch {}
 
         // Parse fallback response
@@ -219,7 +213,7 @@ export const generateSearchPlan = async (
           }
         }
         if (!parsed2) {
-          console.warn(JSON.stringify({ type: 'debug.plan.fallback.parse_fail' }));
+          DebugLogger.warn('plan', { type: 'debug.plan.fallback.parse_fail' });
           // proceed to chat completions fallback
         }
         if (parsed2) parsed = parsed2;
@@ -243,15 +237,13 @@ export const generateSearchPlan = async (
           max_tokens: 700,
         });
         // Debug
-        try {
-          console.log(JSON.stringify({ type: 'debug.plan.cc.peek', choices: (cc as any)?.choices?.length || 0 }));
-        } catch {}
+        DebugLogger.log('plan', { type: 'debug.plan.cc.peek', choices: (cc as any)?.choices?.length || 0 });
         const content = (cc as any)?.choices?.[0]?.message?.content || '';
         if (typeof content === 'string' && content.trim().startsWith('{')) {
           parsed = JSON.parse(content);
         }
       } catch (e) {
-        try { console.warn(JSON.stringify({ type: 'debug.plan.cc.error', message: (e as any)?.message || 'error' })); } catch {}
+        DebugLogger.warn('plan', { type: 'debug.plan.cc.error', message: (e as any)?.message || 'error' });
         return null;
       }
     }
@@ -291,6 +283,28 @@ export const generateSearchPlan = async (
       }
       return Array.from(uniq).slice(0, max);
     };
+
+    const cleanKeywords = (arr: string[] | undefined, max: number) => {
+      const uniq = new Set<string>();
+      for (const s of arr || []) {
+        const raw = String(s || '').trim();
+        if (!raw) continue;
+        // Single-token only (no whitespace)
+        if (/\s/.test(raw)) continue;
+        // Drop too short tokens
+        if (raw.length < 2) continue;
+        // Allow only word-ish tokens with optional hyphen/underscore (Korean/English/numbers)
+        const token = raw.replace(/[\u200B-\u200D\uFEFF]/g, '');
+        if (!/^[\p{L}\p{N}_-]+$/u.test(token)) continue;
+        const key = token.toLowerCase();
+        if (stopwords.has(key)) continue;
+        if (uniq.has(key)) continue;
+        uniq.add(key);
+      }
+      // cap to 1..5
+      const list = Array.from(uniq);
+      return list.slice(0, Math.min(5, Math.max(0, max)));
+    };
     if ((plan as any)?.filters?.time) {
       const abs = toAbsoluteRangeKst(plan.filters?.time as any, now);
       if (abs) {
@@ -310,12 +324,13 @@ export const generateSearchPlan = async (
     normPlan.limit = Math.min(20, Math.max(1, normPlan.limit || 5));
     normPlan.threshold = Math.min(1, Math.max(0, normPlan.threshold ?? 0.2));
     const maxRewrites = clamp(plan.hybrid?.max_rewrites ?? 3, 0, 4);
-    const maxKeywords = clamp(plan.hybrid?.max_keywords ?? 6, 0, 8);
+    // Even if plan suggests up to 8, we normalize to 1..5 for quality
+    const maxKeywords = Math.min(5, clamp(plan.hybrid?.max_keywords ?? 6, 0, 8));
 
     // Map retrieval_bias -> alpha (fallback to provided alpha or default)
     const bias = (plan.hybrid as any)?.retrieval_bias || 'balanced';
-    const biasAlpha = bias === 'lexical' ? 0.3 : bias === 'semantic' ? 0.75 : 0.5;
-    const alpha = clamp(((plan.hybrid as any)?.alpha ?? biasAlpha) as number, 0, 1);
+    const preset = getPreset(bias as any);
+    const alpha = clamp(((plan.hybrid as any)?.alpha ?? preset.alpha) as number, 0, 1);
 
     normPlan.hybrid = {
       enabled: !!plan.hybrid?.enabled,
@@ -325,52 +340,43 @@ export const generateSearchPlan = async (
       max_keywords: maxKeywords,
     } as any;
     normPlan.rewrites = cleanList(plan.rewrites, maxRewrites) as any;
-    normPlan.keywords = cleanList(plan.keywords, maxKeywords) as any;
+    normPlan.keywords = cleanKeywords(plan.keywords, maxKeywords) as any;
     if (!normPlan.mode) normPlan.mode = (ctx.post_id ? 'post' : 'rag') as any;
 
     // Note: Only filters.time is kept here to satisfy the SearchPlan schema.
     //       user_id/category_ids/post_id will be injected later by the query layer.
 
     // Console debug: final parsed + normalized plan
-    try {
-      const timeInfo = (normPlan as any)?.filters?.time;
-      console.log(
-        JSON.stringify(
-          {
-            type: 'debug.plan.final',
-            ctx: { user_id: ctx.user_id, category_id: ctx.category_id, post_id: ctx.post_id },
-            summary: {
-              mode: normPlan.mode,
-              top_k: normPlan.top_k,
-              threshold: normPlan.threshold,
-              weights: normPlan.weights,
-              sort: normPlan.sort,
-              limit: normPlan.limit,
-              hybrid: {
-                enabled: !!normPlan.hybrid?.enabled,
-                retrieval_bias: normPlan.hybrid?.retrieval_bias,
-                alpha: normPlan.hybrid?.alpha,
-                max_rewrites: normPlan.hybrid?.max_rewrites,
-                max_keywords: normPlan.hybrid?.max_keywords,
-              },
-              time: timeInfo ? { type: timeInfo.type, from: timeInfo.from, to: timeInfo.to } : null,
-              rewrites_len: (normPlan.rewrites || []).length,
-              keywords_len: (normPlan.keywords || []).length,
-            },
-            plan,
-            normalized: normPlan,
-          },
-          null,
-          0,
-        ),
-      );
-    } catch {}
+    const timeInfo = (normPlan as any)?.filters?.time;
+    DebugLogger.log('plan', {
+      type: 'debug.plan.final',
+      ctx: { user_id: ctx.user_id, category_id: ctx.category_id, post_id: ctx.post_id },
+      summary: {
+        mode: normPlan.mode,
+        top_k: normPlan.top_k,
+        threshold: normPlan.threshold,
+        weights: normPlan.weights,
+        sort: normPlan.sort,
+        limit: normPlan.limit,
+        hybrid: {
+          enabled: !!normPlan.hybrid?.enabled,
+          retrieval_bias: normPlan.hybrid?.retrieval_bias,
+          alpha: normPlan.hybrid?.alpha,
+          max_rewrites: normPlan.hybrid?.max_rewrites,
+          max_keywords: normPlan.hybrid?.max_keywords,
+        },
+        time: timeInfo ? { type: timeInfo.type, from: timeInfo.from, to: timeInfo.to } : null,
+        rewrites_len: (normPlan.rewrites || []).length,
+        keywords_len: (normPlan.keywords || []).length,
+        keywords_preview: (normPlan.keywords || []).slice(0, 5),
+      },
+      plan,
+      normalized: normPlan,
+    });
 
     return { plan, normalized: normPlan };
   } catch (e) {
-    try {
-      console.error(JSON.stringify({ type: 'debug.plan.error', message: (e as any)?.message || 'error' }));
-    } catch {}
+    DebugLogger.error('plan', { type: 'debug.plan.error', message: (e as any)?.message || 'error' });
     return null;
   }
 };

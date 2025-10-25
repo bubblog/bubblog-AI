@@ -2,11 +2,12 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import aiRouter from './routes/ai.routes';
 import aiV2Router from './routes/ai.v2.routes';
+import searchRouter from './routes/search.routes';
 
 const app: Express = express();
 
 // CORS 설정
-const allowedOrigins = ['http://localhost:3001', 'https://bubblog-fe.vercel.app'];
+const allowedOrigins = ['http://localhost:3001', 'https://bubblog-fe.vercel.app', 'https://bubblog.kro.kr'];
 
 const corsOptions: cors.CorsOptions = {
   origin: allowedOrigins,
@@ -23,6 +24,7 @@ app.get('/', (request: Request, response: Response) => {
 
 app.use('/ai', aiRouter);
 app.use('/ai/v2', aiV2Router);
+app.use('/search', searchRouter);
 
 // Central Error Handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {

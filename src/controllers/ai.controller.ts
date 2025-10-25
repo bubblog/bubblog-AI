@@ -7,6 +7,7 @@ import {
 } from '../services/embedding.service';
 import { answerStream } from '../services/qa.service';
 import { EmbedTitleRequest, EmbedContentRequest, AskRequest } from '../types/ai.types';
+import { DebugLogger } from '../utils/debug-logger';
 
 export const embedTitleHandler = async (
   req: Request<{}, {}, EmbedTitleRequest>,
@@ -72,11 +73,7 @@ export const askHandler = async (
       const canFlush = typeof (res as any).flush === 'function';
       // try to flush if supported by runtime/middleware
       (res as any).flush?.();
-      try {
-        console.log(
-          JSON.stringify({ type: 'debug.sse.write', at: Date.now(), bytes: buf.length, flushed: canFlush })
-        );
-      } catch {}
+      DebugLogger.log('sse', { type: 'debug.sse.write', at: Date.now(), bytes: buf.length, flushed: canFlush });
     });
     stream.on('end', () => {
       res.end();
