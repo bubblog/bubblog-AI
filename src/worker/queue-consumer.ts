@@ -7,7 +7,6 @@ import {
   storeTitleEmbedding,
 } from '../services/embedding.service';
 import { findPostById } from '../repositories/post.repository';
-import { DebugLogger } from '../utils/debug-logger';
 
 type EmbeddingJob = {
   postId: number;
@@ -37,7 +36,7 @@ let shuttingDown = false;
 const handleShutdown = (signal: NodeJS.Signals) => {
   if (shuttingDown) return;
   shuttingDown = true;
-  DebugLogger.warn('server', { type: 'worker.shutdown', signal });
+  console.warn('[embedding-worker]', { type: 'worker.shutdown', signal });
   try {
     redis.disconnect();
   } catch {
@@ -68,11 +67,11 @@ const processJob = async (job: EmbeddingJob) => {
   const shouldProcessTitle = parseFlag(job.title);
   const shouldProcessContent = parseFlag(job.content);
 
-    if (!shouldProcessTitle && !shouldProcessContent) {
-      DebugLogger.warn('server', {
-        type: 'worker.job.skipped',
-        postId,
-        reason: 'no_targets',
+  if (!shouldProcessTitle && !shouldProcessContent) {
+    console.warn('[embedding-worker]', {
+      type: 'worker.job.skipped',
+      postId,
+      reason: 'no_targets',
     });
     return;
   }
@@ -88,7 +87,7 @@ const processJob = async (job: EmbeddingJob) => {
 
   if (shouldProcessTitle) {
     if (!title) {
-      DebugLogger.warn('server', {
+      console.warn('[embedding-worker]', {
         type: 'worker.job.skipped',
         postId,
         reason: 'empty_title',
@@ -101,7 +100,7 @@ const processJob = async (job: EmbeddingJob) => {
 
   if (shouldProcessContent) {
     if (!content) {
-      DebugLogger.warn('server', {
+      console.warn('[embedding-worker]', {
         type: 'worker.job.skipped',
         postId,
         reason: 'empty_content',
@@ -112,7 +111,7 @@ const processJob = async (job: EmbeddingJob) => {
     const chunks = chunkText(content);
 
     if (!chunks.length) {
-      DebugLogger.warn('server', {
+      console.warn('[embedding-worker]', {
         type: 'worker.job.skipped',
         postId,
         reason: 'no_chunks',
@@ -138,7 +137,7 @@ const pushToFailedQueue = async (payload: unknown) => {
       })
     );
   } catch (error) {
-    DebugLogger.error('server', {
+    console.error('[embedding-worker]', {
       type: 'worker.failed_queue_error',
       message: (error as Error)?.message ?? 'unknown',
     });
@@ -150,7 +149,7 @@ const handlePayload = async (rawPayload: string) => {
   try {
     job = JSON.parse(rawPayload) as EmbeddingJob;
   } catch (error) {
-    DebugLogger.error('server', {
+    console.error('[embedding-worker]', {
       type: 'worker.job.invalid_json',
       error: (error as Error)?.message ?? 'invalid_json',
     });
@@ -159,7 +158,7 @@ const handlePayload = async (rawPayload: string) => {
   }
 
   const attempt = Number(job.attempt || 0);
-  DebugLogger.log('server', {
+  console.log('[embedding-worker]', {
     type: 'worker.job.start',
     postId: job.postId,
     attempt,
@@ -167,7 +166,7 @@ const handlePayload = async (rawPayload: string) => {
 
   try {
     await processJob(job);
-    DebugLogger.log('server', {
+    console.log('[embedding-worker]', {
       type: 'worker.job.success',
       postId: job.postId,
     });
@@ -182,7 +181,7 @@ const handlePayload = async (rawPayload: string) => {
     };
 
     if (nextAttempt < maxRetries) {
-      DebugLogger.warn('server', {
+      console.warn('[embedding-worker]', {
         type: 'worker.job.retry',
         postId: job.postId,
         attempt: nextAttempt,
@@ -193,7 +192,7 @@ const handlePayload = async (rawPayload: string) => {
       }
       await redis.lpush(queueKey, JSON.stringify(enrichedPayload));
     } else {
-      DebugLogger.error('server', {
+      console.error('[embedding-worker]', {
         type: 'worker.job.failed',
         postId: job.postId,
         attempt: nextAttempt,
@@ -205,7 +204,7 @@ const handlePayload = async (rawPayload: string) => {
 };
 
 const run = async () => {
-  DebugLogger.info('server', {
+  console.info('[embedding-worker]', {
     type: 'worker.start',
     queueKey,
     failedQueueKey,
@@ -220,7 +219,7 @@ const run = async () => {
       await handlePayload(payload);
     } catch (error) {
       if (shuttingDown) break;
-      DebugLogger.error('server', {
+      console.error('[embedding-worker]', {
         type: 'worker.loop_error',
         message: (error as Error)?.message ?? 'unknown',
       });
@@ -230,7 +229,7 @@ const run = async () => {
     }
   }
 
-  DebugLogger.info('server', { type: 'worker.exit' });
+  console.info('[embedding-worker]', { type: 'worker.exit' });
 };
 
 run().catch((error) => {
