@@ -32,6 +32,13 @@ export interface TextSearchHit {
   postTags?: string[];
 }
 
+export interface TextSearchHit {
+  postId: string;
+  postTitle: string;
+  postChunk: string;
+  textScore: number;
+}
+
 // ========= READ QUERIES =========
 export const findPostById = async (postId: number): Promise<Post | null> => {
   const pool = getDb();
