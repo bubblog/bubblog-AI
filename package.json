@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "db:migrate:pgtrgm": "psql \"$DATABASE_URL\" -f docs/migrations/2025-01-pgtrgm.sql"
+    "db:migrate:pgtrgm": "psql \"$DATABASE_URL\" -f docs/migrations/2025-01-pgtrgm.sql",
+    "worker": "node dist/worker/queue-consumer.js",
+    "worker:dev": "ts-node src/worker/queue-consumer.ts"
   },
   "keywords": [],
   "author": "",
@@ -29,6 +31,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
     "openai": "^4.47.1",
     "pg": "^8.11.5",
