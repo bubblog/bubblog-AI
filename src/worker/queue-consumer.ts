@@ -6,12 +6,13 @@ import {
   storeContentEmbeddings,
   storeTitleEmbedding,
 } from '../services/embedding.service';
+import { findPostById } from '../repositories/post.repository';
 import { DebugLogger } from '../utils/debug-logger';
 
 type EmbeddingJob = {
   postId: number;
-  title?: string | null;
-  content?: string | null;
+  title?: boolean | string | null;
+  content?: boolean | string | null;
   attempt?: number;
   metadata?: Record<string, unknown>;
 };
@@ -54,23 +55,60 @@ const processJob = async (job: EmbeddingJob) => {
     throw new Error('Invalid postId in embedding job');
   }
 
-  const title = typeof job.title === 'string' ? job.title.trim() : '';
-  const content = typeof job.content === 'string' ? job.content.trim() : '';
+  const parseFlag = (value: boolean | string | null | undefined) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const lowered = value.trim().toLowerCase();
+      if (lowered === 'true') return true;
+      if (lowered === 'false') return false;
+    }
+    return false;
+  };
 
-  if (!title && !content) {
-    DebugLogger.warn('server', {
-      type: 'worker.job.skipped',
-      postId,
-      reason: 'empty_payload',
+  const shouldProcessTitle = parseFlag(job.title);
+  const shouldProcessContent = parseFlag(job.content);
+
+    if (!shouldProcessTitle && !shouldProcessContent) {
+      DebugLogger.warn('server', {
+        type: 'worker.job.skipped',
+        postId,
+        reason: 'no_targets',
     });
     return;
   }
 
-  if (title) {
-    await storeTitleEmbedding(postId, title);
+  const post = await findPostById(postId);
+
+  if (!post) {
+    throw new Error(`Post ${postId} not found`);
   }
 
-  if (content) {
+  const title = typeof post.title === 'string' ? post.title.trim() : '';
+  const content = typeof post.content === 'string' ? post.content.trim() : '';
+
+  if (shouldProcessTitle) {
+    if (!title) {
+      DebugLogger.warn('server', {
+        type: 'worker.job.skipped',
+        postId,
+        reason: 'empty_title',
+      });
+    } else {
+      await storeTitleEmbedding(postId, title);
+      console.log(`[embedding-worker] stored title embedding for post ${postId}`);
+    }
+  }
+
+  if (shouldProcessContent) {
+    if (!content) {
+      DebugLogger.warn('server', {
+        type: 'worker.job.skipped',
+        postId,
+        reason: 'empty_content',
+      });
+      return;
+    }
+
     const chunks = chunkText(content);
 
     if (!chunks.length) {
@@ -84,6 +122,9 @@ const processJob = async (job: EmbeddingJob) => {
 
     const embeddings = await createEmbeddings(chunks);
     await storeContentEmbeddings(postId, chunks, embeddings);
+    console.log(
+      `[embedding-worker] stored content embeddings for post ${postId} (chunks=${chunks.length})`
+    );
   }
 };
 

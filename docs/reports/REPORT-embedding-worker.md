@@ -8,10 +8,10 @@
 ## 2. 워커 구조
 - 파일: `src/worker/queue-consumer.ts`
   - Redis 연결: `REDIS_URL`(우선) 또는 `REDIS_HOST`/`REDIS_PORT`.
-  - 작업 형식: `{ postId, title?, content?, attempt? }`.
+  - 작업 형식: `{ postId, title, content, attempt? }` (`title`/`content`는 boolean 플래그).
   - 처리 순서
     1. `BRPOP` 으로 `EMBEDDING_QUEUE_KEY` 대기.
-    2. 제목(`storeTitleEmbedding`)과 본문(`chunkText` → `createEmbeddings` → `storeContentEmbeddings`) 순차 처리.
+    2. 플래그 기준으로 DB에서 게시글을 조회(`findPostById`)하고, 제목(`storeTitleEmbedding`)과 본문(`chunkText` → `createEmbeddings` → `storeContentEmbeddings`)을 필요 시 처리.
     3. 오류 시 재시도: `attempt` 증가, `EMBEDDING_WORKER_MAX_RETRIES`, `EMBEDDING_WORKER_BACKOFF_MS` 기반 backoff, 한계를 넘으면 `EMBEDDING_FAILED_QUEUE_KEY` 로 이동.
   - 기타: Graceful shutdown(SIGINT/SIGTERM), DebugLogger 로 주요 이벤트 기록.
 
@@ -59,7 +59,7 @@ services:
 - Secrets(예시): `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `EMBEDDING_QUEUE_KEY`, `EMBEDDING_FAILED_QUEUE_KEY`, `EMBEDDING_WORKER_MAX_RETRIES`, `EMBEDDING_WORKER_BACKOFF_MS` 등.
 
 ## 7. 운영 참고 사항
-- Spring Boot 프로듀서는 LPUSH 로 작업을 큐에 적재(이미 구현됨).
+- Spring Boot 프로듀서는 LPUSH 로 작업을 큐에 적재하며, `title`/`content` 변경 여부를 boolean 값으로 전달한다(이미 구현됨).
 - Redis 는 외부 서버/매니지드 환경을 사용; 본 프로젝트 컨테이너에서는 Consumer 역할만 수행.
 - 실패 큐(`embedding:failed`) 모니터링 및 재처리(예: RPOP → LPUSH → 재시도 스케줄러) 전략 필요.
 - API 컨테이너에서 Redis 변수가 필요하지는 않지만, 비상시 커맨드 오버라이드를 대비해 공통으로 주입해 둔 상태.
