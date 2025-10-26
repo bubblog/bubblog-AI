@@ -13,7 +13,7 @@
     1. `BRPOP` 으로 `EMBEDDING_QUEUE_KEY` 대기.
     2. 플래그 기준으로 DB에서 게시글을 조회(`findPostById`)하고, 제목(`storeTitleEmbedding`)과 본문(`chunkText` → `createEmbeddings` → `storeContentEmbeddings`)을 필요 시 처리.
     3. 오류 시 재시도: `attempt` 증가, `EMBEDDING_WORKER_MAX_RETRIES`, `EMBEDDING_WORKER_BACKOFF_MS` 기반 backoff, 한계를 넘으면 `EMBEDDING_FAILED_QUEUE_KEY` 로 이동.
-  - 기타: Graceful shutdown(SIGINT/SIGTERM), DebugLogger 로 주요 이벤트 기록.
+  - 기타: Graceful shutdown(SIGINT/SIGTERM), 콘솔 로그로 주요 이벤트 기록.
 
 ## 3. 환경 변수 (추가 항목)
 | 키 | 용도 | 기본값 |
