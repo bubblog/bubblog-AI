@@ -6,6 +6,7 @@ import {
 } from '../controllers/ai.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 
+// AI 관련 1세대 엔드포인트를 정의
 const aiRouter = Router();
 
 aiRouter.get('/health', (req, res) => {

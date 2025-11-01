@@ -1,14 +1,14 @@
 import { z } from 'zod';
 
-// ===== Plan JSON Schema (Zod) =====
+// ===== 검색 계획 JSON 스키마 (Zod) =====
 
-// Time filter schema: support multiple shapes to reduce LLM fragility
+// 시간 필터 스키마: LLM의 취약성을 줄이기 위해 다양한 형태 지원
 export const timeFilterSchema = z.discriminatedUnion('type', [
-  // Absolute ISO range
+  // 절대 ISO 범위
   z
     .object({ type: z.literal('absolute'), from: z.string(), to: z.string() })
     .strict(),
-  // Relative window: N units up to today (KST)
+  // 상대 기간: 오늘(KST)까지 N 단위
   z
     .object({
       type: z.literal('relative'),
@@ -16,17 +16,17 @@ export const timeFilterSchema = z.discriminatedUnion('type', [
       value: z.number().int().min(1).max(365),
     })
     .strict(),
-  // Month of a year (default year=now)
+  // 특정 연도의 월 (연도는 기본적으로 현재)
   z
     .object({ type: z.literal('month'), year: z.number().int().optional(), month: z.number().int().min(1).max(12) })
     .strict(),
-  // Quarter of a year (default year=now)
+  // 특정 연도의 분기 (연도는 기본적으로 현재)
   z
     .object({ type: z.literal('quarter'), year: z.number().int().optional(), quarter: z.number().int().min(1).max(4) })
     .strict(),
-  // Single year
+  // 단일 연도
   z.object({ type: z.literal('year'), year: z.number().int() }).strict(),
-  // Named presets (limited set)
+  // 미리 정의된 기간 프리셋
   z
     .object({
       type: z.literal('named'),
@@ -43,7 +43,7 @@ export const timeFilterSchema = z.discriminatedUnion('type', [
       ]),
     })
     .strict(),
-  // Free-form label, e.g., "2006_to_now", "2024-Q3", "2019-2022", "2024-09"
+  // 자유 형식 라벨 예시: "2006_to_now", "2024-Q3", "2019-2022", "2024-09"
   z.object({ type: z.literal('label'), label: z.string().min(1) }).strict(),
 ]);
 
@@ -59,7 +59,7 @@ export const planSchema = z.object({
   hybrid: z
     .object({
       enabled: z.boolean().default(false),
-      // LLM outputs retrieval_bias label; server maps to alpha
+      // LLM이 출력한 retrieval_bias 라벨을 서버에서 alpha로 매핑
       retrieval_bias: z.enum(['lexical', 'balanced', 'semantic']).default('balanced'),
       alpha: z.number().min(0).max(1).optional(),
       max_rewrites: z.number().int().min(0).max(4).default(3),
@@ -78,7 +78,7 @@ export const planSchema = z.object({
 
 export type SearchPlan = z.infer<typeof planSchema>;
 
-// ===== API: /ai/v2/ask =====
+// ===== API: /ai/v2/ask 요청 본문 스키마 =====
 
 export const askV2Schema = z.object({
   body: z.object({

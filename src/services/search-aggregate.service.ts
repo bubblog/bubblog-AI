@@ -15,6 +15,7 @@ export type PostHit = {
   best: { chunkIndex?: number; snippet: string; score: number };
 };
 
+// 청크 결과를 포스트 단위로 묶어 페이징 결과를 작성
 export const aggregatePosts = (
   chunks: ChunkHit[],
   opts?: { perPostMax?: number; limit?: number; offset?: number }
@@ -23,7 +24,7 @@ export const aggregatePosts = (
   const limit = Math.max(1, Math.min(10, opts?.limit ?? 10));
   const offset = Math.max(0, opts?.offset ?? 0);
 
-  // Group by post
+  // 포스트 단위로 묶기
   const byPost = new Map<string, ChunkHit[]>();
   for (const c of chunks) {
     const arr = byPost.get(c.postId) || [];
@@ -31,7 +32,7 @@ export const aggregatePosts = (
     byPost.set(c.postId, arr);
   }
 
-  // Build post-level hits
+  // 포스트별 점수 계산
   const posts: PostHit[] = [];
   for (const [postId, arr] of byPost.entries()) {
     const sorted = arr.slice().sort((a, b) => b.similarityScore - a.similarityScore);
@@ -58,4 +59,3 @@ export const aggregatePosts = (
   const page = posts.slice(offset, offset + limit);
   return { posts: page, total };
 };
-

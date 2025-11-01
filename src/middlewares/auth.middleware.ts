@@ -6,6 +6,7 @@ export interface AuthRequest extends Request {
   user?: string | jwt.JwtPayload;
 }
 
+// Bearer 토큰을 검증해 요청 사용자 정보를 주입
 export const authMiddleware = (
   req: AuthRequest,
   res: Response,

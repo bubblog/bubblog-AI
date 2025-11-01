@@ -15,6 +15,7 @@ const CHUNK_OVERLAP = 50;
  * @param content The text content to be split.
  * @returns An array of text chunks.
  */
+// 본문을 토큰 길이 기준으로 청크 분할
 export const chunkText = (content: string): string[] => {
   const tokenizer = get_encoding('cl100k_base');
   const sentences = content.split(/(?<=[.?!])\s+/);
@@ -46,6 +47,7 @@ export const chunkText = (content: string): string[] => {
  * @param texts The texts to be embedded.
  * @returns A promise that resolves to an array of embeddings.
  */
+// OpenAI 임베딩 API를 호출해 텍스트 배열을 벡터로 변환
 export const createEmbeddings = async (texts: string[]): Promise<number[][]> => {
   const response = await openai.embeddings.create({
     model: config.EMBED_MODEL,
@@ -59,6 +61,7 @@ export const createEmbeddings = async (texts: string[]): Promise<number[][]> => 
  * @param postId The ID of the post.
  * @param title The title of the post.
  */
+// 단일 제목 임베딩을 생성하여 저장
 export const storeTitleEmbedding = async (postId: number, title: string) => {
   const [embedding] = await createEmbeddings([title]);
   await postRepository.storeTitleEmbedding(postId, embedding);
@@ -70,6 +73,7 @@ export const storeTitleEmbedding = async (postId: number, title: string) => {
  * @param chunks The text chunks of the content.
  * @param embeddings The vector embeddings of the chunks.
  */
+// 본문 청크와 임베딩을 트랜잭션으로 저장
 export const storeContentEmbeddings = async (
   postId: number,
   chunks: string[],

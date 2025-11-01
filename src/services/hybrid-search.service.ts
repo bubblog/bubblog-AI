@@ -23,6 +23,7 @@ type Candidate = {
   postCreatedAt?: string;
 };
 
+// 하이브리드 검색 계획에 따라 벡터·텍스트 검색을 결합
 export const runHybridSearch = async (
   question: string,
   userId: string,
@@ -41,7 +42,7 @@ export const runHybridSearch = async (
 
   const embeddings = await createEmbeddings(queries);
 
-  // Compute per-rewrite similarity weights (index 0 = original question)
+  // 재작성 문장별 유사도 가중치 계산 (0번째는 원 질문)
   const dot = (a: number[], b: number[]) => {
     let s = 0;
     const n = Math.min(a.length, b.length);
@@ -59,7 +60,7 @@ export const runHybridSearch = async (
   const qEmb = embeddings[0];
   const weightsByIndex: number[] = new Array(embeddings.length).fill(1);
   const keepIndex: boolean[] = new Array(embeddings.length).fill(true);
-  const floor = 0.35; // similarity floor in [0,1]
+  const floor = 0.35; // [0,1] 범위에서 허용할 최소 유사도
   const isDeclarative = (s: string): boolean => {
     const str = (s || '').trim();
     if (!str) return false;
@@ -72,19 +73,19 @@ export const runHybridSearch = async (
   };
 
   for (let i = 1; i < embeddings.length; i++) {
-    const sim = cos(qEmb, embeddings[i]); // [-1,1]
+    const sim = cos(qEmb, embeddings[i]); // [-1,1] 범위의 코사인 유사도
     const sim01 = Math.max(0, Math.min(1, (sim + 1) / 2));
-    let weight = 0.6 + 0.6 * sim01; // map to [0.6, 1.2]
+    let weight = 0.6 + 0.6 * sim01; // [0.6, 1.2] 범위로 스케일링
     const rw = rewrites[i - 1] || '';
     if (isDeclarative(rw)) {
       const floorBase = bias === 'semantic' ? 1.0 : 0.95;
       if (weight < floorBase) weight = floorBase;
     }
     weightsByIndex[i] = weight;
-    if (sim01 < floor) keepIndex[i] = false; // drop low-quality rewrites for vector path
+    if (sim01 < floor) keepIndex[i] = false; // 기준 이하 재작성은 벡터 후보에서 제외
   }
 
-  // Telemetry: rewrite weights
+  // 재작성 가중치에 대한 디버그 로깅
   DebugLogger.log('hybrid', {
     type: 'debug.hybrid.rewrite_weights',
     rewrites,
@@ -162,7 +163,7 @@ export const runHybridSearch = async (
   let semBoostCount = 0;
   let lexBoostCount = 0;
 
-  // Extend lexical search to rewrites as queries for recall
+  // 재작성 문장을 텍스트 검색에도 활용해 검색 폭 확장
   for (let i = 1; i < embeddings.length; i++) {
     if (!keepIndex[i]) continue;
     const q = rewrites[i - 1];
@@ -211,7 +212,7 @@ export const runHybridSearch = async (
   const boosted = list.map((c) => {
     let v = normalize01(c.vecScore || 0, vMin, vMax);
     let t = normalize01(c.textScore || 0, tMin, tMax);
-    // Threshold-based boosts
+    // 임계값 기반 보정
     if (v >= preset.sem_boost_threshold) {
       v = Math.min(1, v + 0.1);
       semBoostCount++;
@@ -224,7 +225,7 @@ export const runHybridSearch = async (
     return { postId: c.postId, postTitle: c.postTitle, postChunk: c.postChunk, similarityScore: score, chunkIndex: c.chunkIndex, postCreatedAt: c.postCreatedAt };
   });
 
-  // Telemetry for boosts
+  // 보정 결과를 로깅하여 모니터링
   DebugLogger.log('hybrid', {
     type: 'debug.hybrid.boosts',
     bias,
@@ -234,7 +235,7 @@ export const runHybridSearch = async (
     counts: { sem: semBoostCount, lex: lexBoostCount },
   });
 
-  // Post-level diversity: max N chunks per post before final limit
+  // 포스트 단위 다양성: 각 포스트당 최대 N개 청크만 유지
   const MAX_CHUNKS_PER_POST = 2;
   const sorted = boosted.sort((a, b) => b.similarityScore - a.similarityScore);
   const byPostCount = new Map<string, number>();

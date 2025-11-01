@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// POST /ai/embeddings/title
+// POST /ai/embeddings/title 요청 본문 스키마
 export const embedTitleSchema = z.object({
   body: z.object({
     post_id: z.number(),
@@ -10,7 +10,7 @@ export const embedTitleSchema = z.object({
 
 export type EmbedTitleRequest = z.infer<typeof embedTitleSchema>['body'];
 
-// POST /ai/embeddings/content
+// POST /ai/embeddings/content 요청 본문 스키마
 export const embedContentSchema = z.object({
   body: z.object({
     post_id: z.number(),
@@ -20,7 +20,7 @@ export const embedContentSchema = z.object({
 
 export type EmbedContentRequest = z.infer<typeof embedContentSchema>['body'];
 
-// POST /ai/ask
+// POST /ai/ask 요청 본문 스키마
 export const askSchema = z.object({
   body: z.object({
     question: z.string(),

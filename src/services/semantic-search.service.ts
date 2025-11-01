@@ -11,6 +11,7 @@ export type SemanticSearchResult = {
   postCreatedAt?: string;
 }[];
 
+// 벡터 임베딩만 사용하여 유사 청크를 조회
 export const runSemanticSearch = async (
   question: string,
   userId: string,

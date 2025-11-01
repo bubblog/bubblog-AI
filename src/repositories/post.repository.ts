@@ -1,7 +1,7 @@
 import pgvector from 'pgvector/pg';
 import { getDb } from '../utils/db';
 
-// ========= INTERFACES =========
+// ========= 인터페이스 정의 =========
 export interface Post {
   id: number;
   title: string;
@@ -39,11 +39,12 @@ export interface TextSearchHit {
   textScore: number;
 }
 
-// ========= READ QUERIES =========
+// ========= 조회 쿼리 =========
+// 포스트 ID로 본문과 메타데이터를 조회
 export const findPostById = async (postId: number): Promise<Post | null> => {
   const pool = getDb();
-  // Some databases may not have a `tags` column on blog_post.
-  // Select existing columns and populate `tags` as an empty array fallback.
+  // 일부 데이터베이스에는 blog_post 테이블에 `tags` 컬럼이 없을 수 있음
+  // 존재하는 컬럼만 조회하고 `tags`는 빈 배열로 대체해 안정성을 확보
   const { rows } = await pool.query(
     'SELECT id, title, content, created_at, user_id, is_public FROM blog_post WHERE id = $1',
     [postId]
@@ -55,7 +56,7 @@ export const findPostById = async (postId: number): Promise<Post | null> => {
     id: row.id,
     title: row.title,
     content: row.content,
-    // Fallback: DB has no tags column; keep empty list so prompts render gracefully
+    // DB에 tags 컬럼이 없을 경우 프롬프트가 자연스럽도록 빈 배열 유지
     tags: Array.isArray(row.tags) ? row.tags : [],
     created_at: row.created_at,
     user_id: row.user_id,
@@ -64,6 +65,7 @@ export const findPostById = async (postId: number): Promise<Post | null> => {
   return post;
 };
 
+// 기본 RAG 경로에서 사용할 상위 유사 청크를 조회
 export const findSimilarChunks = async (
   userId: string,
   questionEmbedding: number[],
@@ -129,7 +131,8 @@ export const findSimilarChunks = async (
   }));
 };
 
-// ========= WRITE QUERIES =========
+// ========= 쓰기 쿼리 =========
+// 제목 임베딩을 upsert로 저장
 export const storeTitleEmbedding = async (postId: number, embedding: number[]) => {
   const pool = getDb();
   await pool.query(
@@ -140,6 +143,7 @@ export const storeTitleEmbedding = async (postId: number, embedding: number[]) =
   );
 };
 
+// 본문 청크 임베딩을 트랜잭션으로 갱신
 export const storeContentEmbeddings = async (
   postId: number,
   chunks: string[],
@@ -169,15 +173,16 @@ export const storeContentEmbeddings = async (
   }
 };
 
-// ========= READ QUERIES (V2 dynamic) =========
+// ========= 조회 쿼리 (V2 동적) =========
+// v2 검색 계획 파라미터에 맞춰 유사 청크를 조회
 export const findSimilarChunksV2 = async (params: {
   userId: string;
   embedding: number[];
   categoryId?: number;
-  from?: string; // ISO UTC
-  to?: string;   // ISO UTC
-  threshold?: number; // 0..1
-  topK?: number; // default 5, max 10
+  from?: string; // ISO UTC 문자열
+  to?: string;   // ISO UTC 문자열
+  threshold?: number; // 0..1 범위
+  topK?: number; // 기본 5, 최대 10
   weights?: { chunk: number; title: number };
   sort?: 'created_at_desc' | 'created_at_asc';
 }): Promise<SimilarChunk[]> => {
@@ -190,7 +195,7 @@ export const findSimilarChunksV2 = async (params: {
   const parts: string[] = [];
   const values: any[] = [];
 
-  // $1: userId, $2: embedding
+  // $1은 userId, $2는 embedding
   values.push(params.userId);
   values.push(pgvector.toSql(params.embedding));
 
@@ -198,7 +203,7 @@ export const findSimilarChunksV2 = async (params: {
   const hasTime = !!(params.from && params.to);
 
   if (hasCategory) {
-    const catParam = values.length + 1; // next index
+    const catParam = values.length + 1; // 다음 플레이스홀더 인덱스
     parts.push(`
       WITH category_ids AS (
         SELECT DISTINCT cc.descendant_id
@@ -220,7 +225,7 @@ export const findSimilarChunksV2 = async (params: {
       )`);
   }
 
-  // base select and threshold
+  // 기본 SELECT 구문과 임계값 조건
   const thrParam = values.length + 1;
   parts.push(`
     SELECT
@@ -266,6 +271,7 @@ export const findSimilarChunksV2 = async (params: {
   }));
 };
 
+// 키워드와 텍스트 유사도 기반 검색 결과를 조회
 export const textSearchChunksV2 = async (params: {
   userId: string;
   query?: string;
@@ -382,14 +388,15 @@ LIMIT $${limitParam}`;
   }));
 };
 
-// ========= GLOBAL (no user/category filter) =========
+// ========= 글로벌 쿼리 (사용자·카테고리 제한 없음) =========
+// 전체 블로그 데이터를 대상으로 ANN 기반 유사 청크 조회
 export const findSimilarChunksGlobalANN = async (params: {
   embedding: number[];
-  threshold?: number; // applied on chunk similarity only
-  topK?: number; // final number to return
+  threshold?: number; // 청크 유사도에만 적용되는 임계값
+  topK?: number; // 최종 반환할 개수
   weights?: { chunk: number; title: number };
   sort?: 'created_at_desc' | 'created_at_asc';
-  annFactor?: number; // multiplier for initial ANN candidates
+  annFactor?: number; // 초기 ANN 후보 개수에 곱할 배수
 }): Promise<SimilarChunk[]> => {
   const pool = getDb();
   const wChunk = Math.max(0, Math.min(1, params.weights?.chunk ?? 0.7));
@@ -452,6 +459,7 @@ export const findSimilarChunksGlobalANN = async (params: {
   }));
 };
 
+// 전역 텍스트 검색으로 하이브리드 보조 후보를 수집
 export const textSearchChunksGlobal = async (params: {
   query?: string;
   keywords?: string[];

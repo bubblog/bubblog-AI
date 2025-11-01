@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 dotenv.config();
 
+// 환경 변수를 스키마로 검증하여 타입 안전한 설정 객체 생성
 const configSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3000),

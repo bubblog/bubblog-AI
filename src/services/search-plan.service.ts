@@ -12,9 +12,10 @@ export type PlanContext = {
   user_id: string;
   category_id?: number;
   post_id?: number;
-  timezone?: string; // default Asia/Seoul
+  timezone?: string; // 기본값: Asia/Seoul
 };
 
+// 질문과 컨텍스트를 기반으로 LLM에 검색 계획을 요청
 export const generateSearchPlan = async (
   question: string,
   ctx: PlanContext
@@ -36,7 +37,7 @@ export const generateSearchPlan = async (
 
 
   try {
-    // Debug prompt before request
+    // 요청 전 프롬프트 내용을 디버그 출력
     DebugLogger.log('plan', {
       type: 'debug.plan.prompt',
       model: 'gpt-5-mini',
@@ -53,7 +54,7 @@ export const generateSearchPlan = async (
       max_output_tokens: 1500,
     });
 
-    // Debug peek: log response shapes before JSON extraction
+    // JSON 추출 전 응답 구조를 미리 로깅
     try {
       const outputs = (response as any)?.output || [];
       const outputSummary = outputs.map((o: any) => ({
@@ -74,7 +75,7 @@ export const generateSearchPlan = async (
       });
     } catch {}
 
-    // Extract structured JSON if available, otherwise parse text
+    // 구조화된 JSON이 있으면 우선 사용하고 없으면 텍스트를 파싱
     let parsed: any = null;
     try {
       const outputs = (response as any)?.output || [];
@@ -88,7 +89,7 @@ export const generateSearchPlan = async (
         if (parsed) break;
       }
     } catch {}
-    // Also check output_text for JSON string if using Responses API response_format
+    // Responses API의 output_text에 JSON 문자열이 있는지도 확인
     if (!parsed && typeof (response as any)?.output_text === 'string') {
       const s = ((response as any).output_text as string).trim();
       if (s.startsWith('{')) {
@@ -109,14 +110,14 @@ export const generateSearchPlan = async (
         }
       } catch {}
       const raw = texts.join('').trim();
-      // Debug: log raw text before JSON.parse
+      // JSON 파싱 전에 원본 텍스트를 디버그 로그로 남김
       DebugLogger.log('plan', { type: 'debug.plan.raw_text', len: raw.length, head: raw.slice(0, 200) });
       if (!raw) {
-        // Graceful fallback: unable to parse structured output
+        // 구조화된 출력을 파싱하지 못한 경우 우아하게 폴백
         return null;
       }
 
-      // Robust extraction of first balanced JSON object
+      // 균형 잡힌 첫 번째 JSON 객체를 견고하게 추출
       const tryParse = (s: string): any | null => {
         try { return JSON.parse(s); } catch { return null; }
       };
@@ -161,7 +162,7 @@ export const generateSearchPlan = async (
       parsed = candidate;
     }
 
-    // If still no parsed plan at this point, try a fallback call without text.format
+    // 여전히 파싱에 실패하면 text.format 옵션 없이 폴백 호출 시도
     if (!parsed) {
       try {
         const response2: any = await (openai as any).responses.create({
@@ -169,7 +170,7 @@ export const generateSearchPlan = async (
           input: prompt,
           max_output_tokens: 700,
         });
-        // Debug peek for fallback
+        // 폴백 호출 응답을 디버그로 확인
         try {
           const outputs = (response2 as any)?.output || [];
           const outputSummary = outputs.map((o: any) => ({
@@ -189,7 +190,7 @@ export const generateSearchPlan = async (
           });
         } catch {}
 
-        // Parse fallback response
+        // 폴백 응답을 파싱
         let parsed2: any = null;
         try {
           const outputs = (response2 as any)?.output || [];
@@ -214,15 +215,15 @@ export const generateSearchPlan = async (
         }
         if (!parsed2) {
           DebugLogger.warn('plan', { type: 'debug.plan.fallback.parse_fail' });
-          // proceed to chat completions fallback
+          // Chat Completions 폴백으로 진행
         }
         if (parsed2) parsed = parsed2;
       } catch {
-        // continue to chat completions fallback
+        // Chat Completions 폴백으로 계속 진행
       }
     }
 
-    // Final fallback: Chat Completions with JSON object mode
+    // 최종 폴백: JSON 객체 모드의 Chat Completions 호출
     if (!parsed) {
       try {
         const sys = 'You output ONLY a single JSON object matching the SearchPlan shape. No extra text.';
@@ -236,7 +237,7 @@ export const generateSearchPlan = async (
           response_format: { type: 'json_object' },
           max_tokens: 700,
         });
-        // Debug
+        // 디버그 용도로 응답 개수를 기록
         DebugLogger.log('plan', { type: 'debug.plan.cc.peek', choices: (cc as any)?.choices?.length || 0 });
         const content = (cc as any)?.choices?.[0]?.message?.content || '';
         if (typeof content === 'string' && content.trim().startsWith('{')) {
@@ -249,11 +250,11 @@ export const generateSearchPlan = async (
     }
     const plan = planSchema.parse(parsed);
 
-    // Normalize weights sum to 1
+    // 가중치 합이 1이 되도록 정규화
     const sum = (plan.weights?.chunk ?? 0) + (plan.weights?.title ?? 0);
     const weights = sum > 0 ? { chunk: plan.weights.chunk / sum, title: plan.weights.title / sum } : { chunk: 0.7, title: 0.3 };
 
-    // Normalize time range to absolute if provided
+    // 시간 필터가 있으면 절대 범위로 정규화
     let normPlan: SearchPlan = { ...plan, weights };
 
     const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -289,11 +290,11 @@ export const generateSearchPlan = async (
       for (const s of arr || []) {
         const raw = String(s || '').trim();
         if (!raw) continue;
-        // Single-token only (no whitespace)
+        // 공백 없는 단일 토큰만 허용
         if (/\s/.test(raw)) continue;
-        // Drop too short tokens
+        // 너무 짧은 토큰은 제외
         if (raw.length < 2) continue;
-        // Allow only word-ish tokens with optional hyphen/underscore (Korean/English/numbers)
+        // 한글·영문·숫자와 하이픈/언더스코어만 허용하여 단어 형태 유지
         const token = raw.replace(/[\u200B-\u200D\uFEFF]/g, '');
         if (!/^[\p{L}\p{N}_-]+$/u.test(token)) continue;
         const key = token.toLowerCase();
@@ -301,7 +302,7 @@ export const generateSearchPlan = async (
         if (uniq.has(key)) continue;
         uniq.add(key);
       }
-      // cap to 1..5
+      // 최종 개수를 1~5 범위로 제한
       const list = Array.from(uniq);
       return list.slice(0, Math.min(5, Math.max(0, max)));
     };
@@ -313,21 +314,21 @@ export const generateSearchPlan = async (
           filters: { ...normPlan.filters, time: { type: 'absolute', from: abs.from, to: abs.to } as any },
         };
       } else {
-        // drop invalid time
+        // 유효하지 않은 시간 필터는 제거
         const { time, ...rest } = normPlan.filters || ({} as any);
         normPlan = { ...normPlan, filters: rest as any };
       }
     }
 
-    // Enforce bounds just in case
+    // 혹시 모를 값에 대비해 범위를 강제
     normPlan.top_k = Math.min(10, Math.max(1, normPlan.top_k || 5));
     normPlan.limit = Math.min(20, Math.max(1, normPlan.limit || 5));
     normPlan.threshold = Math.min(1, Math.max(0, normPlan.threshold ?? 0.2));
     const maxRewrites = clamp(plan.hybrid?.max_rewrites ?? 3, 0, 4);
-    // Even if plan suggests up to 8, we normalize to 1..5 for quality
+    // 계획에서 최대 8개를 제안해도 품질을 위해 1~5개로 정규화
     const maxKeywords = Math.min(5, clamp(plan.hybrid?.max_keywords ?? 6, 0, 8));
 
-    // Map retrieval_bias -> alpha (fallback to provided alpha or default)
+    // retrieval_bias에 따라 alpha 값을 재계산 (명시 값이 있으면 우선)
     const bias = (plan.hybrid as any)?.retrieval_bias || 'balanced';
     const preset = getPreset(bias as any);
     const alpha = clamp(((plan.hybrid as any)?.alpha ?? preset.alpha) as number, 0, 1);
@@ -343,10 +344,10 @@ export const generateSearchPlan = async (
     normPlan.keywords = cleanKeywords(plan.keywords, maxKeywords) as any;
     if (!normPlan.mode) normPlan.mode = (ctx.post_id ? 'post' : 'rag') as any;
 
-    // Note: Only filters.time is kept here to satisfy the SearchPlan schema.
-    //       user_id/category_ids/post_id will be injected later by the query layer.
+    // 참고: SearchPlan 스키마 요구사항상 filters.time만 유지한다.
+    //       user_id/category_ids/post_id는 쿼리 단계에서 주입된다.
 
-    // Console debug: final parsed + normalized plan
+    // 최종 파싱·정규화된 계획을 로그로 남김
     const timeInfo = (normPlan as any)?.filters?.time;
     DebugLogger.log('plan', {
       type: 'debug.plan.final',

@@ -9,6 +9,7 @@ import config from '../config';
 import { randomUUID } from 'crypto';
 import { DebugLogger } from '../utils/debug-logger';
 
+// LLM 제공자별 스트림을 추상화하여 공통 SSE 포맷으로 반환
 export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
   const merged = { ...req };
   if (!merged.provider || !merged.model) {
@@ -23,13 +24,13 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
   const model = merged.model as string;
   const provider = merged.provider as string;
 
-  // Pre-call logging: prompt tokens + estimated input cost
+  // 호출 전에 프롬프트 토큰 수와 예상 입력 비용을 기록
   const messages = merged.messages || [];
   let promptTokens = 0;
   try {
     promptTokens = countChatMessagesTokens(messages as any, model);
   } catch {
-    // ignore
+    // 무시
   }
   const pricing = getModelPricing(model);
   const estInputCost = pricing ? calcCost(promptTokens, pricing.input_per_1k) : 0;
@@ -63,20 +64,20 @@ export const generate = async (req: GenerateRequest): Promise<PassThrough> => {
           return s;
         })();
 
-  // Wrap provider stream to accumulate output tokens
+  // 공급자 스트림을 감싸 출력 토큰을 집계
   const outer = new PassThrough();
   let buffer = '';
   let outputText = '';
 
-  // Debug: start info
+  // 디버그: 호출 시작 정보
   try {
     DebugLogger.log('llm', { type: 'debug.llm.start', provider, model, messages: (messages || []).length });
   } catch {}
 
   const flushBuffer = () => {
-    // Split by double newline to get SSE events
+    // 두 줄바꿈을 기준으로 SSE 이벤트 단위로 분할
     const chunks = buffer.split('\n\n');
-    // Keep last partial
+    // 마지막 미완성 조각은 버퍼에 보존
     buffer = chunks.pop() || '';
     for (const block of chunks) {
       const lines = block.split('\n');

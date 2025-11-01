@@ -4,6 +4,7 @@ import aiRouter from './routes/ai.routes';
 import aiV2Router from './routes/ai.v2.routes';
 import searchRouter from './routes/search.routes';
 
+// Express 애플리케이션과 공용 미들웨어를 초기화
 const app: Express = express();
 
 // CORS 설정
@@ -26,7 +27,8 @@ app.use('/ai', aiRouter);
 app.use('/ai/v2', aiV2Router);
 app.use('/search', searchRouter);
 
-// Central Error Handler
+// 중앙 에러 처리기
+// 전역 에러 처리기로 예기치 못한 서버 오류를 JSON으로 반환
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   console.error(err.stack);
   res.status(500).json({ 
