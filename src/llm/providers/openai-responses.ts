@@ -7,8 +7,8 @@ import { DebugLogger } from '../../utils/debug-logger';
 const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
 const toResponsesInput = (messages: OpenAIStyleMessage[] = []) => {
-  // Convert simple chat-style messages to Responses API input format
-  // Responses API expects 'input_text' as the content type (not 'text').
+  // 단순 채팅 메시지를 Responses API 입력 구조로 변환
+  // Responses API는 content 타입으로 'text'가 아닌 'input_text'를 요구함
   return messages.map((m) => ({
     role: m.role,
     content: [{ type: 'input_text', text: m.content }],
@@ -16,7 +16,7 @@ const toResponsesInput = (messages: OpenAIStyleMessage[] = []) => {
 };
 
 const toResponsesTools = (tools: OpenAIStyleTool[] = []) => {
-  // Map Chat Completions style tool definitions to Responses API format
+  // Chat Completions 형식의 툴 정의를 Responses API 형식으로 변환
   // Chat: { type: 'function', function: { name, description, parameters } }
   // Responses: { type: 'function', name, description, parameters }
   return tools
@@ -29,9 +29,10 @@ const toResponsesTools = (tools: OpenAIStyleTool[] = []) => {
     }));
 };
 
+// OpenAI Responses API를 사용해 SSE 스트림을 구성
 export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassThrough> => {
   const stream = new PassThrough();
-  // Guard to avoid writing after stream end
+  // 스트림 종료 후에도 쓰지 않도록 보호 장치 설정
   let closed = false;
   const safeWrite = (chunk: string) => {
     if (!closed && !stream.writableEnded && !stream.destroyed) {
@@ -50,10 +51,10 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
   const messages = req.messages || [];
   const toolsChat = (req.tools || []) as OpenAIStyleTool[];
 
-  // For gpt-5-* prefer Responses API. For other models, fall back to Chat Completions streaming.
+  // gpt-5 계열은 Responses API를 우선 사용하고, 그 외 모델은 Chat Completions 스트리밍으로 폴백
   const isGpt5Family = /(^|\b)gpt-5/i.test(model);
 
-  // Debug: basic call info
+  // 호출 기본 정보를 디버그 로그로 남김
   DebugLogger.log('openai', {
     type: 'debug.openai.start',
     model,
@@ -70,7 +71,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
 
   try {
     if (isGpt5Family) {
-      // Prefer Responses API streaming for gpt-5
+      // gpt-5 계열에서는 Responses API 스트리밍을 우선 사용
       try {
         const respParams: any = {
           model,
@@ -78,7 +79,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           tools: toolsChat && toolsChat.length > 0 ? toResponsesTools(toolsChat) : undefined,
           max_output_tokens: req.options?.max_output_tokens,
         };
-        // GPT-5 family: omit temperature/top_p; allow reasoning/text controls
+        // GPT-5 계열은 temperature/top_p 없이 추론·텍스트 옵션만 전달
         if (req.options?.reasoning_effort) {
           respParams.reasoning = { effort: req.options.reasoning_effort };
         } else {
@@ -88,7 +89,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
         if (req.options?.text_verbosity) {
           respParams.text = { verbosity: req.options.text_verbosity };
         } else {
-          // Encourage text output on GPT-5 if not specified
+          // 옵션이 없으면 텍스트 출력을 유도하기 위해 낮은 verbosity 지정
           respParams.text = { verbosity: 'low' };
         }
         DebugLogger.log('openai', {
@@ -98,21 +99,15 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
         });
         const responsesStream: any = await (openai as any).responses.stream(respParams);
 
-        // let loggedFirstDelta = false;
         responsesStream.on('response.output_text.delta', (ev: any) => {
           const text = typeof ev === 'string' ? ev : ev?.delta ?? '';
           if (text) {
             safeWrite(`event: answer\n`);
             safeWrite(`data: ${JSON.stringify(text)}\n\n`);
-            // try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length, at: Date.now() })); } catch {}
-            // if (!loggedFirstDelta) {
-              // try { console.log(JSON.stringify({ type: 'debug.openai.delta', len: String(text).length })); } catch {}
-              // loggedFirstDelta = true;
-            // }
           }
         });
 
-        // Stream tool-call arguments as answer chunks to maintain SSE shape
+        // 툴 호출 인수 델타를 SSE 답변 이벤트로 전달
         responsesStream.on('response.tool_call.delta', (ev: any) => {
           const argsDelta = ev?.arguments_delta || ev?.arguments || ev?.delta || '';
           if (argsDelta) {
@@ -120,7 +115,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
             safeWrite(`data: ${JSON.stringify(argsDelta)}\n\n`);
           }
         });
-        // Also handle non-delta tool_call events
+        // 델타가 아닌 툴 호출 이벤트도 동일하게 처리
         responsesStream.on('response.tool_call', (ev: any) => {
           const args = ev?.arguments || ev?.arguments_delta || '';
           if (args) {
@@ -129,27 +124,27 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           }
         });
 
-        // Catch-all messages to ensure we don't miss alternative text events
+        // 기타 메시지를 포착해 다른 텍스트 이벤트를 놓치지 않도록 처리
         responsesStream.on('message', (msg: any) => {
           try {
             const m = typeof msg === 'string' ? JSON.parse(msg) : msg;
             if (!m) return;
-            // Prefer explicit output_text delta
+            // output_text 델타가 있으면 우선 처리
             if (m.type === 'response.output_text.delta' && m.delta) {
               safeWrite(`event: answer\n`);
               safeWrite(`data: ${JSON.stringify(m.delta)}\n\n`);
             }
-            // Some SDKs may emit full output_text chunk at once
+            // 일부 SDK는 전체 output_text를 한 번에 전송할 수 있음
             else if (m.type === 'response.output_text' && typeof m.text === 'string') {
               safeWrite(`event: answer\n`);
               safeWrite(`data: ${JSON.stringify(m.text)}\n\n`);
             }
-            // Generic delta fallback
+            // 일반 델타 이벤트에 대한 폴백 처리
             else if (m.type === 'response.delta' && typeof m.delta === 'string') {
               safeWrite(`event: answer\n`);
               safeWrite(`data: ${JSON.stringify(m.delta)}\n\n`);
             }
-            // Log for visibility
+            // 관찰을 위해 로그 남기기
             DebugLogger.log('openai', {
               type: 'debug.openai.msg',
               mtype: m.type,
@@ -178,7 +173,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           });
         });
 
-        // Do not await completion here; return immediately so callers can consume deltas in real-time
+        // 완료를 기다리지 않고 즉시 반환해 실시간 델타 소비를 허용
         (async () => {
           try {
             await responsesStream.done();
@@ -186,12 +181,12 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
         })();
         return stream;
       } catch (e) {
-        // Fallback to non-streaming Responses if streaming path fails
+        // 스트리밍 경로가 실패하면 비스트리밍 Responses 호출로 폴백
         try {
           const createParams: any = {
             model,
             input: toResponsesInput(messages) as any,
-            // Avoid tools in non-streaming mode to ensure text output
+            // 비스트리밍 모드에서는 텍스트 출력을 보장하기 위해 툴을 제외
             max_output_tokens: req.options?.max_output_tokens,
           };
           if (req.options?.reasoning_effort) createParams.reasoning = { effort: req.options.reasoning_effort };
@@ -217,7 +212,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
                 return parts || '';
               }
             } catch {
-              // ignore
+              // 무시
             }
             return '';
           })();
@@ -233,7 +228,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
           safeEnd();
           return stream;
         } catch (e2) {
-          // fall through to chat completions streaming below
+          // 실패 시 아래 Chat Completions 스트리밍으로 폴백
           DebugLogger.error('openai', {
             type: 'debug.openai.error',
             path: 'responses.create',
@@ -243,11 +238,11 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
       }
     }
 
-    // Chat Completions streaming as universal fallback
+    // Chat Completions 스트리밍을 최종 폴백으로 사용
     DebugLogger.log('openai', { type: 'debug.openai.path', path: 'chat.completions.stream' });
     let chatStream: any;
 
-    // temperature/top_p are not supported on reasoning models (e.g., GPT-5 family)
+    // 추론 모델(GPT-5 계열 등)은 temperature/top_p 옵션을 지원하지 않음
     if (!isGpt5Family) {
       chatStream = await openai.chat.completions.create({
         model,
@@ -270,7 +265,7 @@ export const generateOpenAIStream = async (req: GenerateRequest): Promise<PassTh
       });
     }
     
-    // Iterate asynchronously; return stream immediately to allow real-time consumption
+    // 비동기로 순회하며 즉시 반환하여 실시간 소비를 지원
     (async () => {
       try {
         for await (const chunk of chatStream) {

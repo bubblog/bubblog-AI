@@ -7,6 +7,7 @@ export const askV2Handler = async (
   res: Response,
   next: NextFunction
 ) => {
+  // 검색 계획 기반 v2 QA를 SSE로 중계
   try {
     const { question, user_id, category_id, speech_tone, post_id, llm } = req.body as any;
     res.setHeader('Content-Type', 'text/event-stream');
@@ -26,4 +27,3 @@ export const askV2Handler = async (
     next(error);
   }
 };
-

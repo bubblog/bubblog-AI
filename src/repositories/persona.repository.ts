@@ -5,6 +5,7 @@ export interface Persona {
   description: string;
 }
 
+// 사용자별 커스텀 페르소나 정보를 조회
 export const findPersonaById = async (
   personaId: number,
   userId: string

@@ -11,11 +11,13 @@ import { runHybridSearch } from './hybrid-search.service';
 import { createEmbeddings } from './embedding.service';
 import { DebugLogger } from '../utils/debug-logger';
 
+// HTML을 제거하고 길이를 제한해 LLM 컨텍스트를 정리
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   return plainText.length > 40000 ? plainText.substring(0, 40000) : plainText;
 };
 
+// 말투 ID나 프리셋에 따른 지시문을 구성
 const getSpeechTonePrompt = async (speechTone: number, userId: string): Promise<string> => {
   if (speechTone === -1) return '간결하고 명확한 말투로 답변해';
   if (speechTone === -2)
@@ -32,6 +34,7 @@ type LlmOverride = {
   options?: { temperature?: number; top_p?: number; max_output_tokens?: number };
 };
 
+// 검색 계획을 활용한 v2 QA 스트림을 생성
 export const answerStreamV2 = async (
   question: string,
   userId: string,
@@ -66,7 +69,7 @@ export const answerStreamV2 = async (
     };
 
     if (postId) {
-      // Post-centric path (same as v1 with added v2 pre-events)
+      // 단일 포스트 컨텍스트 흐름 (v1과 동일하되 v2 이벤트 추가)
       const post = await postRepository.findPostById(postId);
       if (!post) {
         stream.write(`event: error\n`);
@@ -80,7 +83,7 @@ export const answerStreamV2 = async (
         stream.end();
         return;
       }
-      // Emit plan event for transparency
+      // 검색 계획 정보를 스트림으로 먼저 공지
       stream.write(`event: search_plan\n`);
       stream.write(
         `data: ${JSON.stringify({ mode: 'post', filters: { post_id: postId, user_id: userId } })}\n\n`
@@ -99,10 +102,10 @@ export const answerStreamV2 = async (
         qaPrompts.createPostContextPrompt(post, processed, question, speechTonePrompt, blogMeta ?? undefined)
       );
     } else {
-      // Plan generation
+      // 질문 기반 검색 계획 생성 경로
       const planPair = await generateSearchPlan(question, { user_id: userId, category_id: categoryId });
       if (!planPair) {
-        // Fallback to v1 RAG silently
+        // 계획 생성 실패 시 v1 RAG로 조용히 폴백
         const [questionEmbedding] = await createEmbeddings([question]);
         const similarChunks = await postRepository.findSimilarChunks(userId, questionEmbedding, categoryId);
         const context = similarChunks.map((c) => ({ postId: c.postId, postTitle: c.postTitle }));
@@ -135,7 +138,7 @@ export const answerStreamV2 = async (
         const plan: any = planPair.normalized;
         stream.write(`event: search_plan\n`);
         stream.write(`data: ${JSON.stringify(plan)}\n\n`);
-        // Console debug for emitted search plan
+        // 전송된 검색 계획을 디버그 로그로 남김
         DebugLogger.log('sse', {
           type: 'debug.sse.search_plan',
           userId,
@@ -180,7 +183,7 @@ export const answerStreamV2 = async (
           const hybridContext = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
           stream.write(`event: hybrid_result\n`);
           stream.write(`data: ${JSON.stringify(hybridContext)}\n\n`);
-          // Optional enriched metadata for clients that opt-in
+          // 메타데이터를 선택적으로 구독하는 클라이언트를 위한 추가 이벤트
           try {
             const hybridMeta = rows.map((r) => ({
               postId: r.postId,
@@ -202,7 +205,7 @@ export const answerStreamV2 = async (
         const context = rows.map((r) => ({ postId: r.postId, postTitle: r.postTitle }));
         stream.write(`event: search_result\n`);
         stream.write(`data: ${JSON.stringify(context)}\n\n`);
-        // Optional enriched metadata for clients that opt-in
+        // 메타데이터를 선택적으로 요청하는 클라이언트를 위한 추가 이벤트
         try {
           const resultMeta = rows.map((r) => ({
             postId: r.postId,

@@ -88,6 +88,7 @@ const formatPayload = (channel: DebugChannel, payload: unknown): string => {
   return `[debug][${channel}] ${toInlineValue(payload)}`;
 };
 
+// 채널 기반으로 디버그 로그를 조건부 출력
 export const DebugLogger = {
   isEnabled(channel: DebugChannel): boolean {
     return enabledAll || enabledChannels.has(channel);

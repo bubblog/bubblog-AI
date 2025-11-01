@@ -11,6 +11,7 @@ export type UserBlogMetadata = {
  * Loads blog-specific metadata (nickname, profile image, category names) for a user.
  * Returns null when the user does not exist or userId is a non-real sentinel value (e.g., "global").
  */
+// 사용자 블로그 메타데이터를 수집해 QA 프롬프트에 제공
 export const findUserBlogMetadata = async (userId: string | null | undefined): Promise<UserBlogMetadata | null> => {
   if (!userId || userId === 'global') {
     return null;
@@ -45,4 +46,3 @@ export const findUserBlogMetadata = async (userId: string | null | undefined): P
     categoryNames: Array.isArray(row.category_names) ? row.category_names.filter((name: any) => typeof name === 'string') : [],
   };
 };
-

@@ -1,7 +1,8 @@
-// Search Plan prompt templates for v2
+// v2 검색 계획 프롬프트 템플릿 모음
 
 import { SearchPlan } from '../types/ai.v2.types';
 
+// Responses API에 전달할 검색 계획 JSON 스키마 정의
 export const getSearchPlanSchemaJson = (): Record<string, unknown> => ({
   type: 'object',
   additionalProperties: false,
@@ -31,8 +32,8 @@ export const getSearchPlanSchemaJson = (): Record<string, unknown> => ({
       },
       required: ['enabled', 'retrieval_bias', 'max_rewrites', 'max_keywords'],
     },
-    // Only time is allowed under filters. Responses JSON Schema requires closed objects
-    // with explicit required fields at each level.
+    // Responses JSON 스키마 제약으로 filters에는 time만 허용
+    // 각 계층마다 필요한 필드를 명시해야 함
     filters: {
       type: 'object',
       additionalProperties: false,
@@ -137,6 +138,7 @@ export const getSearchPlanSchemaJson = (): Record<string, unknown> => ({
   required: ['mode', 'top_k', 'threshold', 'weights', 'rewrites', 'keywords', 'hybrid', 'filters', 'sort', 'limit'],
 });
 
+// 검색 계획 생성을 위해 LLM에 전달할 프롬프트 문자열 구성
 export const buildSearchPlanPrompt = (params: {
   now_utc: string;
   now_kst: string;

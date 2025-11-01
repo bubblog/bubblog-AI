@@ -8,11 +8,13 @@ import { generate } from '../llm';
 import { DebugLogger } from '../utils/debug-logger';
 import * as userRepository from '../repositories/user.repository';
 
+// HTML 태그를 제거하고 길이를 제한하여 LLM 컨텍스트를 정제
 const preprocessContent = (content: string): string => {
   const plainText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   return plainText.length > 40000 ? plainText.substring(0, 40000) : plainText;
 };
 
+// 사용자 말투 ID에 따라 프롬프트 지시문을 반환
 const getSpeechTonePrompt = async (speechTone: number, userId: string): Promise<string> => {
   if (speechTone === -1) return "간결하고 명확한 말투로 답변해";
   if (speechTone === -2) return "아래의 블로그 본문 컨텍스트를 참고하여 본문의 말투를 파악해 최대한 비슷한 말투로 답변해";
@@ -22,7 +24,7 @@ const getSpeechTonePrompt = async (speechTone: number, userId: string): Promise<
   if (persona) {
     return `${persona.name}: ${persona.description}`;
   }
-  return "간결하고 명확한 말투로 답변해"; // Default
+  return "간결하고 명확한 말투로 답변해"; // 기본 말투
 }
 
 type LlmOverride = {
@@ -31,6 +33,7 @@ type LlmOverride = {
   options?: { temperature?: number; top_p?: number; max_output_tokens?: number };
 };
 
+// 질문에 대한 RAG 답변을 SSE 스트림으로 생성
 export const answerStream = async (
   question: string,
   userId: string,
@@ -82,7 +85,7 @@ export const answerStream = async (
         return;
       }
       
-      // Enforce conditional ownership: if post is not public, require owner
+      // 비공개 글이면 소유자만 접근하도록 검증
       if (!post.is_public && post.user_id !== userId) {
         stream.write(`event: error\n`);
         stream.write(`data: ${JSON.stringify({ code: 403, message: 'Forbidden' })}\n\n`);

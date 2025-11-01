@@ -1,13 +1,13 @@
-// Minimal KST time utilities and range normalization
+// KST 기반 시간 계산과 범위 정규화 유틸리티
 
-const KST_OFFSET_MINUTES = 9 * 60; // UTC+9
+const KST_OFFSET_MINUTES = 9 * 60; // UTC+9 오프셋(분)
 
 const toDate = (isoOrDate: string | Date): Date => (isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate));
 
 export const nowUtc = (): Date => new Date();
 
 export const toKst = (d: Date): Date => {
-  // Convert UTC date to KST by adding offset
+  // UTC 시각에 오프셋을 더해 KST로 변환
   return new Date(d.getTime() + KST_OFFSET_MINUTES * 60 * 1000);
 };
 
@@ -22,28 +22,29 @@ export const startOfMonth = (year: number, monthIndex0: number): Date => new Dat
 export const endOfMonth = (year: number, monthIndex0: number): Date => new Date(year, monthIndex0 + 1, 0, 23, 59, 59, 999);
 
 export const startOfQuarter = (year: number, quarter: number): Date => {
-  const m0 = (quarter - 1) * 3; // 0-based month index
+  const m0 = (quarter - 1) * 3; // 0부터 시작하는 분기 첫 달 인덱스
   return new Date(year, m0, 1, 0, 0, 0, 0);
 };
 export const endOfQuarter = (year: number, quarter: number): Date => {
-  const m0 = quarter * 3 - 1; // end month index
+  const m0 = quarter * 3 - 1; // 분기 마지막 달 인덱스
   return new Date(year, m0 + 1, 0, 23, 59, 59, 999);
 };
 
 export type AbsoluteRange = { from: string; to: string };
 
+// 다양한 시간 필터 입력을 KST 기준 ISO 범위로 변환
 export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, base: Date = nowUtc()): AbsoluteRange | null => {
   try {
     const baseKst = toKst(base);
     const year = baseKst.getFullYear();
-    // Named presets
+    // 미리 정의된 기간 프리셋 처리
     if (input.type === 'named') {
       const p = String(input.preset || '').toLowerCase();
       const endK = endOfDay(baseKst);
       const beginOfTodayK = startOfDay(baseKst);
       const endUtc = fromKstToUtc(endK).toISOString();
       const todayStartUtc = fromKstToUtc(beginOfTodayK).toISOString();
-      if (p === 'all' || p === 'all_time') return null; // no time filter
+      if (p === 'all' || p === 'all_time') return null; // 시간 필터 없음
       if (p === 'today') return { from: todayStartUtc, to: endUtc };
       if (p === 'yesterday') {
         const yK = new Date(beginOfTodayK.getTime());
@@ -72,7 +73,7 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         const toK = endOfMonth(yAdj, mAdj);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(toK).toISOString() };
       }
-      return null; // unknown named: drop filter
+      return null; // 알 수 없는 프리셋이면 필터 제거
     }
     if (input.type === 'relative') {
       const unit = String(input.unit);
@@ -117,7 +118,7 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
       if (!raw) return null;
       const s = raw.replace(/\s+/g, '').toLowerCase();
       const endK = endOfDay(baseKst);
-      // Support common named tokens expressed as labels
+      // 라벨 형식으로 표현된 공통 기간 패턴 지원
       const startTodayK = startOfDay(baseKst);
       const toUtcStr = fromKstToUtc(endK).toISOString();
       const fromTodayUtcStr = fromKstToUtc(startTodayK).toISOString();
@@ -127,7 +128,7 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         fromK.setDate(fromK.getDate() - (n - 1));
         return { from: fromKstToUtc(startOfDay(fromK)).toISOString(), to: fromKstToUtc(toK).toISOString() };
       };
-      if (s === 'all' || s === 'all_time') return null; // drop filter
+      if (s === 'all' || s === 'all_time') return null; // 필터 제거
       if (s === 'today') return { from: fromTodayUtcStr, to: toUtcStr };
       if (s === 'yesterday') {
         const yK = new Date(startTodayK.getTime());
@@ -150,14 +151,14 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         const toK = endOfMonth(yAdj, mAdj);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(toK).toISOString() };
       }
-      // 1) YYYY_to_now / YYYY-to-now
+      // 1) YYYY_to_now / YYYY-to-now 패턴
       let m = s.match(/^(\d{4})(?:_|-|to)+now$/);
       if (m) {
         const y = parseInt(m[1], 10);
         const fromK = startOfMonth(y, 0);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(endK).toISOString() };
       }
-      // 2) YYYY-YYYY / YYYY..YYYY / YYYY_to_YYYY
+      // 2) YYYY-YYYY / YYYY..YYYY / YYYY_to_YYYY 패턴
       m = s.match(/^(\d{4})(?:\.|_|-|to){1,2}(\d{4})$/);
       if (m) {
         const y1 = parseInt(m[1], 10);
@@ -168,7 +169,7 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         const toK = endOfMonth(b, 11);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(toK).toISOString() };
       }
-      // 3) YYYY-Qn or Qn-YYYY
+      // 3) YYYY-Qn 또는 Qn-YYYY 패턴
       m = s.match(/^(\d{4})(?:-|_)q([1-4])$/);
       if (m) {
         const y = parseInt(m[1], 10);
@@ -185,7 +186,7 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         const toK = endOfQuarter(y, q);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(toK).toISOString() };
       }
-      // 4) YYYY-MM
+      // 4) YYYY-MM 형식
       m = s.match(/^(\d{4})(?:-|_)?(\d{1,2})$/);
       if (m) {
         const y = parseInt(m[1], 10);
@@ -194,7 +195,7 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         const toK = endOfMonth(y, month - 1);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(toK).toISOString() };
       }
-      // 5) YYYY
+      // 5) YYYY 단일 연도
       m = s.match(/^(\d{4})$/);
       if (m) {
         const y = parseInt(m[1], 10);
@@ -202,10 +203,10 @@ export const toAbsoluteRangeKst = (input: { type: string; [k: string]: any }, ba
         const toK = endOfMonth(y, 11);
         return { from: fromKstToUtc(fromK).toISOString(), to: fromKstToUtc(toK).toISOString() };
       }
-      return null; // unrecognized label
+      return null; // 해석할 수 없는 라벨
     }
   } catch {
-    // ignore
+    // 무시
   }
   return null;
 };

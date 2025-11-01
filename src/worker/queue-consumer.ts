@@ -40,7 +40,7 @@ const handleShutdown = (signal: NodeJS.Signals) => {
   try {
     redis.disconnect();
   } catch {
-    // ignore
+    // 무시
   }
   setTimeout(() => process.exit(0), 500).unref();
 };
@@ -48,6 +48,7 @@ const handleShutdown = (signal: NodeJS.Signals) => {
 process.on('SIGINT', handleShutdown);
 process.on('SIGTERM', handleShutdown);
 
+// 큐에서 꺼낸 임베딩 작업을 실행
 const processJob = async (job: EmbeddingJob) => {
   const postId = Number(job.postId);
   if (!Number.isFinite(postId) || postId <= 0) {
@@ -127,6 +128,7 @@ const processJob = async (job: EmbeddingJob) => {
   }
 };
 
+// 반복 실패한 작업을 실패 큐에 적재
 const pushToFailedQueue = async (payload: unknown) => {
   try {
     await redis.lpush(
@@ -144,6 +146,7 @@ const pushToFailedQueue = async (payload: unknown) => {
   }
 };
 
+// Redis에서 수신한 페이로드를 파싱하고 처리
 const handlePayload = async (rawPayload: string) => {
   let job: EmbeddingJob;
   try {
@@ -203,6 +206,7 @@ const handlePayload = async (rawPayload: string) => {
   }
 };
 
+// 워커 메인 루프: BRPOP으로 작업을 소비
 const run = async () => {
   console.info('[embedding-worker]', {
     type: 'worker.start',

@@ -4,6 +4,7 @@ import { runHybridSearch } from '../services/hybrid-search.service';
 import { runSemanticSearch } from '../services/semantic-search.service';
 import { aggregatePosts } from '../services/search-aggregate.service';
 
+// 하이브리드 검색 API로 질문을 받아 검색 계획과 결과를 반환
 export const hybridSearchHandler = async (req: Request, res: Response) => {
   try {
     const question = String(req.query.question || '').trim();

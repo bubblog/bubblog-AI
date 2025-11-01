@@ -51,6 +51,7 @@ const buildBlogMetaSection = (meta?: BlogMetadata): { block: string; topicsLine:
   };
 };
 
+// 단일 포스트를 중심으로 QA 시스템 프롬프트를 구성
 export const createPostContextPrompt = (
   post: Post,
   processedContent: string,
@@ -163,6 +164,7 @@ const buildRetrievalSummary = (
   return lines.join('\n');
 };
 
+// 검색 결과 청크를 활용한 RAG 시스템 프롬프트를 생성
 export const createRagPrompt = (
   question: string,
   similarChunks: RagContextChunk[],

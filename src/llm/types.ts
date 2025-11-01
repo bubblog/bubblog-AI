@@ -23,7 +23,7 @@ export type GenerateRequest = {
     temperature?: number;
     top_p?: number;
     max_output_tokens?: number;
-    // GPT-5 family specific controls
+    // GPT-5 계열 전용 제어 옵션
     reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
     text_verbosity?: 'low' | 'medium' | 'high';
   };
