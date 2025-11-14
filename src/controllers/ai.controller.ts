@@ -8,6 +8,9 @@ import {
 import { answerStream } from '../services/qa.service';
 import { EmbedTitleRequest, EmbedContentRequest, AskRequest } from '../types/ai.types';
 import { DebugLogger } from '../utils/debug-logger';
+import { AuthRequest } from '../middlewares/auth.middleware';
+import { extractRequesterId } from '../utils/auth';
+import { resolveSessionContext, SessionContextError } from '../utils/session';
 
 export const embedTitleHandler = async (
   req: Request<{}, {}, EmbedTitleRequest>,
@@ -47,13 +50,36 @@ export const embedContentHandler = async (
 };
 
 export const askHandler = async (
-  req: Request<{}, {}, AskRequest>,
+  req: AuthRequest & Request<{}, {}, AskRequest>,
   res: Response,
   next: NextFunction
 ) => {
   // RAG 기반 QA 결과를 SSE 스트림으로 클라이언트에 전달
   try {
-    const { question, user_id, category_id, speech_tone, post_id, llm } = req.body as any;
+    const requesterUserId = extractRequesterId(req);
+    if (!requesterUserId) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const { question, user_id, session_id, category_id, speech_tone, post_id, llm } = req.body;
+
+    let sessionResult;
+    try {
+      sessionResult = await resolveSessionContext({
+        requesterUserId,
+        sessionId: session_id,
+        ownerUserId: user_id,
+        titleHint: question,
+      });
+    } catch (error) {
+      if (error instanceof SessionContextError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      throw error;
+    }
+
+    const { session, created } = sessionResult;
+    const ownerUserId = session.ownerUserId;
 
     // SSE를 위한 헤더 설정과 버퍼링 완화 옵션
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -61,6 +87,7 @@ export const askHandler = async (
     res.setHeader('Connection', 'keep-alive');
     // Nginx 버퍼링 비활성화
     res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('session-id', String(session.id));
     // 헤더를 먼저 전송해 클라이언트 처리를 즉시 시작
     (res as any).flushHeaders?.();
     // 소켓의 네이글 알고리즘 버퍼링을 줄여 전송 지연 완화
@@ -68,7 +95,17 @@ export const askHandler = async (
     // 프록시 버퍼링 임계값을 넘기기 위한 초기 keep-alive 전송
     res.write(':ok\n\n');
 
-    const stream = await answerStream(question, user_id, category_id, speech_tone, post_id, llm);
+    if (created) {
+      const payload = {
+        session_id: String(session.id),
+        owner_user_id: ownerUserId,
+        requester_user_id: requesterUserId,
+      };
+      res.write(`event: session\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    }
+
+    const stream = await answerStream(question, ownerUserId, category_id, speech_tone, post_id, llm);
     // SSE 델타가 즉시 전송되도록 수동 브리징
     stream.on('data', (chunk) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));

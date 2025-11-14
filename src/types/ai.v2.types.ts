@@ -83,7 +83,8 @@ export type SearchPlan = z.infer<typeof planSchema>;
 export const askV2Schema = z.object({
   body: z.object({
     question: z.string(),
-    user_id: z.string(),
+    user_id: z.string().optional(),
+    session_id: z.string().optional(),
     category_id: z.number().optional(),
     post_id: z.number().optional(),
     speech_tone: z.number().optional(),

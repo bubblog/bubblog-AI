@@ -3,6 +3,7 @@ import { AuthRequest } from '../middlewares/auth.middleware';
 import * as sessionRepository from '../repositories/ask-session.repository';
 import * as messageRepository from '../repositories/ask-message.repository';
 import { sessionListQuerySchema, sessionMessagesQuerySchema, sessionPatchSchema } from '../types/session.types';
+import { extractRequesterId } from '../utils/auth';
 
 const encodeCursor = (createdAt: Date, id: number): string =>
   Buffer.from(`${createdAt.toISOString()}|${id}`).toString('base64');
@@ -19,13 +20,6 @@ const decodeCursor = (cursor: string): { createdAt: Date; id: number } | null =>
   } catch {
     return null;
   }
-};
-
-const resolveRequesterId = (req: AuthRequest): string | null => {
-  const user = req.user;
-  if (!user || typeof user !== 'object') return null;
-  const candidate = (user as Record<string, unknown>).user_id ?? (user as Record<string, unknown>).sub;
-  return typeof candidate === 'string' ? candidate : null;
 };
 
 const toSessionResponse = (
@@ -54,7 +48,7 @@ const toMessageResponse = (message: messageRepository.AskMessage) => ({
 });
 
 export const listSessionsHandler = async (req: AuthRequest, res: Response) => {
-  const requesterId = resolveRequesterId(req);
+  const requesterId = extractRequesterId(req);
   if (!requesterId) return res.status(401).json({ message: 'Unauthorized' });
 
   const parse = sessionListQuerySchema.safeParse(req.query);
@@ -89,7 +83,7 @@ export const listSessionsHandler = async (req: AuthRequest, res: Response) => {
 };
 
 export const getSessionHandler = async (req: AuthRequest, res: Response) => {
-  const requesterId = resolveRequesterId(req);
+  const requesterId = extractRequesterId(req);
   if (!requesterId) return res.status(401).json({ message: 'Unauthorized' });
 
   const sessionId = Number(req.params.id);
@@ -104,7 +98,7 @@ export const getSessionHandler = async (req: AuthRequest, res: Response) => {
 };
 
 export const getSessionMessagesHandler = async (req: AuthRequest, res: Response) => {
-  const requesterId = resolveRequesterId(req);
+  const requesterId = extractRequesterId(req);
   if (!requesterId) return res.status(401).json({ message: 'Unauthorized' });
 
   const sessionId = Number(req.params.id);
@@ -147,7 +141,7 @@ export const getSessionMessagesHandler = async (req: AuthRequest, res: Response)
 };
 
 export const patchSessionHandler = async (req: AuthRequest, res: Response) => {
-  const requesterId = resolveRequesterId(req);
+  const requesterId = extractRequesterId(req);
   if (!requesterId) return res.status(401).json({ message: 'Unauthorized' });
 
   const sessionId = Number(req.params.id);
@@ -167,7 +161,7 @@ export const patchSessionHandler = async (req: AuthRequest, res: Response) => {
 };
 
 export const deleteSessionHandler = async (req: AuthRequest, res: Response) => {
-  const requesterId = resolveRequesterId(req);
+  const requesterId = extractRequesterId(req);
   if (!requesterId) return res.status(401).json({ message: 'Unauthorized' });
 
   const sessionId = Number(req.params.id);
