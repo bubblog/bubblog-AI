@@ -56,14 +56,25 @@ export const askV2Handler = async (
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     }
 
-    const stream = await answerStreamV2(
+    const stream = await answerStreamV2({
       question,
+      session,
+      requesterUserId,
       ownerUserId,
-      category_id,
-      speech_tone,
-      post_id,
-      llm
-    );
+      categoryId: category_id,
+      speechTone: speech_tone,
+      postId: post_id,
+      llm,
+    });
+
+    stream.on('session_saved', (payload) => {
+      res.write(`event: session_saved\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+    stream.on('session_error', (payload) => {
+      res.write(`event: session_error\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
 
     stream.on('data', (chunk) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
@@ -75,6 +86,7 @@ export const askV2Handler = async (
 
     req.on('close', () => {
       try {
+        stream.emit('client_disconnect');
         stream.destroy();
       } catch {}
     });

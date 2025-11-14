@@ -1,4 +1,4 @@
-import { runQuery } from '../utils/db';
+import { runQuery, QueryExecutor } from '../utils/db';
 
 export type JsonMap = Record<string, unknown>;
 
@@ -202,8 +202,8 @@ export const updateSessionMeta = async (
   return mapRow(result.rows[0]);
 };
 
-export const touchSessionLastQuestion = async (sessionId: number): Promise<void> => {
-  await runQuery('UPDATE ask_session SET last_question_at = now(), updated_at = now() WHERE id = $1', [sessionId]);
+export const touchSessionLastQuestion = async (sessionId: number, executor?: QueryExecutor): Promise<void> => {
+  await runQuery('UPDATE ask_session SET last_question_at = now(), updated_at = now() WHERE id = $1', [sessionId], executor);
 };
 
 export const deleteSession = async (sessionId: number, requesterUserId: string): Promise<boolean> => {

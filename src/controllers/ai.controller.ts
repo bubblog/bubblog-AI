@@ -105,7 +105,26 @@ export const askHandler = async (
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     }
 
-    const stream = await answerStream(question, ownerUserId, category_id, speech_tone, post_id, llm);
+    const stream = await answerStream({
+      question,
+      session,
+      requesterUserId,
+      ownerUserId,
+      categoryId: category_id,
+      speechTone: speech_tone,
+      postId: post_id,
+      llm,
+    });
+
+    stream.on('session_saved', (payload) => {
+      res.write(`event: session_saved\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+    stream.on('session_error', (payload) => {
+      res.write(`event: session_error\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+
     // SSE 델타가 즉시 전송되도록 수동 브리징
     stream.on('data', (chunk) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
@@ -125,6 +144,7 @@ export const askHandler = async (
     // 클라이언트 연결이 끊기면 스트림 자원 해제
     req.on('close', () => {
       try {
+        stream.emit('client_disconnect');
         stream.destroy();
       } catch {}
     });
