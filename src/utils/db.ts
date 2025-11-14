@@ -1,4 +1,4 @@
-import { Pool, PoolClient, QueryResult } from 'pg';
+import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import config from '../config';
 
 const pool = new Pool({
@@ -14,7 +14,7 @@ export const getDb = (): DbPool => pool;
 /**
  * Runs a parametrized query using either the shared pool or a provided client.
  */
-export const runQuery = async <T = any>(
+export const runQuery = async <T extends QueryResultRow = QueryResultRow>(
   sql: string,
   params: unknown[] = [],
   executor?: QueryExecutor
