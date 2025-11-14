@@ -109,6 +109,54 @@ export const answerStream = async ({
   let retrievalMetaPayload: Record<string, unknown> | null = null;
   let clientDisconnected = false;
 
+  const replayCachedAnswer = async (cached: sessionHistoryService.CachedAnswerResult) => {
+    if (cached.searchPlan) {
+      stream.write(`event: search_plan\n`);
+      stream.write(`data: ${JSON.stringify(cached.searchPlan)}\n\n`);
+    }
+    const context = Array.isArray((cached.retrievalMeta as any)?.context)
+      ? (cached.retrievalMeta as any).context
+      : null;
+    if (context) {
+      stream.write(`event: search_result\n`);
+      stream.write(`data: ${JSON.stringify(context)}\n\n`);
+      stream.write(`event: context\n`);
+      stream.write(`data: ${JSON.stringify(context)}\n\n`);
+    }
+    const existFlag = (cached.retrievalMeta as any)?.exist_in_post_status;
+    if (typeof existFlag === 'boolean') {
+      stream.write(`event: exist_in_post_status\n`);
+      stream.write(`data: ${JSON.stringify(existFlag)}\n\n`);
+    }
+    stream.write(`event: answer\n`);
+    stream.write(`data: ${JSON.stringify(cached.answer)}\n\n`);
+
+    try {
+      if (!questionEmbedding) throw new Error('Missing question embedding for cache replay');
+      await sessionHistoryService.persistConversation({
+        sessionId: session.id,
+        requesterUserId,
+        ownerUserId,
+        question,
+        answer: cached.answer,
+        searchPlan: cached.searchPlan ?? undefined,
+        retrievalMeta: cached.retrievalMeta ?? undefined,
+        categoryId,
+        postId,
+        questionEmbedding,
+      });
+      stream.emit('session_saved', sessionSavedPayload(session, true));
+    } catch (error) {
+      DebugLogger.error('qa', {
+        type: 'debug.qa.cache_persistence_error',
+        sessionId: session.id,
+        message: (error as Error)?.message ?? 'unknown',
+      });
+      stream.emit('session_error', sessionErrorPayload(session, 'persistence_failed'));
+    }
+    stream.end();
+  };
+
   stream.once('client_disconnect', () => {
     clientDisconnected = true;
   });
@@ -119,6 +167,28 @@ export const answerStream = async ({
       userRepository.findUserBlogMetadata(ownerUserId),
       sessionHistoryService.loadRecentMessages(session.id),
     ]);
+    const embeddingVector = await createEmbeddings([question]);
+    questionEmbedding = embeddingVector[0];
+
+    const cachedAnswer =
+      questionEmbedding &&
+      (await sessionHistoryService.findCachedAnswer({
+        ownerUserId,
+        requesterUserId,
+        embedding: questionEmbedding,
+        postId: postId ?? undefined,
+        categoryId: categoryId ?? undefined,
+      }));
+
+    if (cachedAnswer) {
+      DebugLogger.log('qa', {
+        type: 'debug.qa.cache_hit',
+        sessionId: session.id,
+        similarity: cachedAnswer.similarity,
+      });
+      await replayCachedAnswer(cachedAnswer);
+      return;
+    }
 
     const toSimpleMessages = (
       raw: any[]
@@ -163,20 +233,15 @@ export const answerStream = async ({
         qaPrompts.createPostContextPrompt(post, processedContent, question, speechTonePrompt, blogMeta ?? undefined)
       );
 
-      if (!questionEmbedding) {
-        [questionEmbedding] = await createEmbeddings([question]);
-      }
-
       searchPlanPayload = { mode: 'post', post_id: postId };
       retrievalMetaPayload = {
         strategy: '단일 포스트 컨텍스트',
         post_id: postId,
+        context: [{ postId: post.id, postTitle: post.title }],
+        exist_in_post_status: true,
       };
     } else {
-      if (!questionEmbedding) {
-        [questionEmbedding] = await createEmbeddings([question]);
-      }
-      const similarChunks = await postRepository.findSimilarChunks(ownerUserId, questionEmbedding, categoryId);
+      const similarChunks = await postRepository.findSimilarChunks(ownerUserId, questionEmbedding!, categoryId);
 
       const existInPost = similarChunks.length > 0;
       stream.write(`event: exist_in_post_status\ndata: ${JSON.stringify(existInPost)}\n\n`);
@@ -199,6 +264,8 @@ export const answerStream = async ({
       const retrievalMeta = {
         strategy: categoryId ? `임베딩 기반 RAG (카테고리 ${categoryId})` : '임베딩 기반 RAG',
         resultCount: similarChunks.length,
+        context,
+        exist_in_post_status: existInPost,
       };
       messages = toSimpleMessages(
         qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt, {

@@ -92,6 +92,54 @@ export const answerStreamV2 = async ({
   let questionEmbedding: number[] | null = null;
   let clientDisconnected = false;
 
+  const replayCachedAnswer = async (cached: sessionHistoryService.CachedAnswerResult) => {
+    if (cached.searchPlan) {
+      stream.write(`event: search_plan\n`);
+      stream.write(`data: ${JSON.stringify(cached.searchPlan)}\n\n`);
+    }
+    const context = Array.isArray((cached.retrievalMeta as any)?.context)
+      ? (cached.retrievalMeta as any).context
+      : null;
+    if (context) {
+      stream.write(`event: search_result\n`);
+      stream.write(`data: ${JSON.stringify(context)}\n\n`);
+      stream.write(`event: context\n`);
+      stream.write(`data: ${JSON.stringify(context)}\n\n`);
+    }
+    const existFlag = (cached.retrievalMeta as any)?.exist_in_post_status;
+    if (typeof existFlag === 'boolean') {
+      stream.write(`event: exist_in_post_status\n`);
+      stream.write(`data: ${JSON.stringify(existFlag)}\n\n`);
+    }
+    stream.write(`event: answer\n`);
+    stream.write(`data: ${JSON.stringify(cached.answer)}\n\n`);
+
+    try {
+      if (!questionEmbedding) throw new Error('Missing question embedding for cache replay');
+      await sessionHistoryService.persistConversation({
+        sessionId: session.id,
+        requesterUserId,
+        ownerUserId,
+        question,
+        answer: cached.answer,
+        searchPlan: cached.searchPlan ?? undefined,
+        retrievalMeta: cached.retrievalMeta ?? undefined,
+        categoryId,
+        postId,
+        questionEmbedding,
+      });
+      stream.emit('session_saved', sessionSavedPayload(session, true));
+    } catch (error) {
+      DebugLogger.error('qa', {
+        type: 'debug.qa.v2.cache_persistence_error',
+        sessionId: session.id,
+        message: (error as Error)?.message ?? 'unknown',
+      });
+      stream.emit('session_error', sessionErrorPayload(session, 'persistence_failed'));
+    }
+    stream.end();
+  };
+
   stream.once('client_disconnect', () => {
     clientDisconnected = true;
   });
@@ -104,6 +152,26 @@ export const answerStreamV2 = async ({
       createEmbeddings([question]),
     ]);
     questionEmbedding = embeddingVector[0];
+
+    const cachedAnswer =
+      questionEmbedding &&
+      (await sessionHistoryService.findCachedAnswer({
+        ownerUserId,
+        requesterUserId,
+        embedding: questionEmbedding,
+        postId: postId ?? undefined,
+        categoryId: categoryId ?? undefined,
+      }));
+
+    if (cachedAnswer) {
+      DebugLogger.log('qa', {
+        type: 'debug.qa.v2.cache_hit',
+        sessionId: session.id,
+        similarity: cachedAnswer.similarity,
+      });
+      await replayCachedAnswer(cachedAnswer);
+      return;
+    }
 
     let messages: { role: 'system' | 'user' | 'assistant' | 'tool' | 'function'; content: string }[] = [];
     let tools:
@@ -158,7 +226,12 @@ export const answerStreamV2 = async ({
       );
 
       searchPlanPayload = postPlan;
-      retrievalMetaPayload = { strategy: '단일 포스트 컨텍스트', post_id: postId };
+      retrievalMetaPayload = {
+        strategy: '단일 포스트 컨텍스트',
+        post_id: postId,
+        context: ctx,
+        exist_in_post_status: true,
+      };
     } else {
       // 질문 기반 검색 계획 생성 경로
       const planPair = await generateSearchPlan(question, { user_id: ownerUserId, category_id: categoryId });
@@ -185,6 +258,8 @@ export const answerStreamV2 = async ({
         const retrievalMeta = {
           strategy: '임베딩 기반 RAG (검색 계획 폴백)',
           resultCount: similarChunks.length,
+          context,
+          exist_in_post_status: similarChunks.length > 0,
         };
         messages = toSimpleMessages(
           qaPrompts.createRagPrompt(question, ragChunks, speechTonePrompt, {
@@ -292,6 +367,8 @@ export const answerStreamV2 = async ({
             : '검색 계획 기반 임베딩',
           plan,
           resultCount: rows.length,
+          context,
+          exist_in_post_status: rows.length > 0,
         };
         messages = toSimpleMessages(
           qaPrompts.createRagPrompt(question, planChunks, speechTonePrompt, {
