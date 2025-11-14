@@ -7,6 +7,7 @@ import {
   storeTitleEmbedding,
 } from '../services/embedding.service';
 import { findPostById } from '../repositories/post.repository';
+import { deleteEmbeddingsByOwner } from '../repositories/ask-message-embedding.repository';
 
 type EmbeddingJob = {
   postId: number;
@@ -86,6 +87,8 @@ const processJob = async (job: EmbeddingJob) => {
   const title = typeof post.title === 'string' ? post.title.trim() : '';
   const content = typeof post.content === 'string' ? post.content.trim() : '';
 
+  let invalidateCachedAnswers = false;
+
   if (shouldProcessTitle) {
     if (!title) {
       console.warn('[embedding-worker]', {
@@ -96,6 +99,7 @@ const processJob = async (job: EmbeddingJob) => {
     } else {
       await storeTitleEmbedding(postId, title);
       console.log(`[embedding-worker] stored title embedding for post ${postId}`);
+      invalidateCachedAnswers = true;
     }
   }
 
@@ -125,6 +129,24 @@ const processJob = async (job: EmbeddingJob) => {
     console.log(
       `[embedding-worker] stored content embeddings for post ${postId} (chunks=${chunks.length})`
     );
+    invalidateCachedAnswers = true;
+  }
+
+  if (invalidateCachedAnswers) {
+    try {
+      const removed = await deleteEmbeddingsByOwner(post.user_id);
+      console.log('[embedding-worker]', {
+        type: 'worker.ask_cache.invalidate',
+        ownerUserId: post.user_id,
+        removed,
+      });
+    } catch (error) {
+      console.error('[embedding-worker]', {
+        type: 'worker.ask_cache.invalidate_failed',
+        ownerUserId: post.user_id,
+        message: (error as Error)?.message ?? 'unknown',
+      });
+    }
   }
 };
 
