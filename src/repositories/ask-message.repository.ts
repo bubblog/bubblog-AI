@@ -127,17 +127,15 @@ export const getMessagesBySession = async ({
   values.push(limit);
   const limitIdx = values.length;
 
-  const orderClause =
-    direction === 'forward'
-      ? 'ORDER BY created_at ASC, id ASC'
-      : 'ORDER BY created_at DESC, id DESC';
+  const orderClause = direction === 'forward' ? 'ORDER BY created_at ASC, id ASC' : 'ORDER BY created_at DESC, id DESC';
 
   const result = await runQuery<MessageRow>(
     `${baseSelect} WHERE ${predicates.join(' AND ')} ${orderClause} LIMIT $${limitIdx}`,
     values
   );
 
-  return result.rows.map(mapMessage);
+  const mapped = result.rows.map(mapMessage);
+  return direction === 'forward' ? mapped : mapped.reverse();
 };
 
 export const countMessagesForSession = async (sessionId: number): Promise<number> => {
