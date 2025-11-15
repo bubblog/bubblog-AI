@@ -8,10 +8,9 @@ const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
 const toResponsesInput = (messages: OpenAIStyleMessage[] = []) => {
   // 단순 채팅 메시지를 Responses API 입력 구조로 변환
-  // Responses API는 content 타입으로 'text'가 아닌 'input_text'를 요구함
   return messages.map((m) => ({
     role: m.role,
-    content: [{ type: 'input_text', text: m.content }],
+    content: m.content,
   }));
 };
 
