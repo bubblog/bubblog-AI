@@ -12,6 +12,7 @@ import { createEmbeddings } from './embedding.service';
 import { DebugLogger } from '../utils/debug-logger';
 import * as sessionHistoryService from './session-history.service';
 import { AskSession } from '../repositories/ask-session.repository';
+import { extractAnswerText } from '../utils/sse';
 
 // HTML을 제거하고 길이를 제한해 LLM 컨텍스트를 정리
 const preprocessContent = (content: string): string => {
@@ -397,7 +398,10 @@ export const answerStreamV2 = async ({
 
     llmStream.on('data', (chunk) => {
       const str = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-      bufferedAnswer += str;
+      const answerTexts = extractAnswerText(str);
+      if (answerTexts.length) {
+        bufferedAnswer += answerTexts.join('');
+      }
       stream.write(chunk);
     });
     llmStream.on('end', async () => {
@@ -405,6 +409,12 @@ export const answerStreamV2 = async ({
         stream.end();
         return;
       }
+      DebugLogger.log('qa', {
+        type: 'debug.qa.v2.buffered_answer',
+        sessionId: session.id,
+        length: bufferedAnswer.length,
+        preview: bufferedAnswer.slice(0, 80),
+      });
       try {
         if (questionEmbedding) {
           await sessionHistoryService.persistConversation({

@@ -9,6 +9,7 @@ import * as userRepository from '../repositories/user.repository';
 import { createEmbeddings } from './embedding.service';
 import * as sessionHistoryService from './session-history.service';
 import { AskSession } from '../repositories/ask-session.repository';
+import { extractAnswerText } from '../utils/sse';
 
 // HTML 태그를 제거하고 길이를 제한하여 LLM 컨텍스트를 정제
 const preprocessContent = (content: string): string => {
@@ -303,7 +304,10 @@ export const answerStream = async ({
 
     llmStream.on('data', (chunk) => {
       const str = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-      bufferedAnswer += str;
+      const answerTexts = extractAnswerText(str);
+      if (answerTexts.length) {
+        bufferedAnswer += answerTexts.join('');
+      }
       DebugLogger.log('qa', {
         type: 'debug.qa.chunk',
         at: Date.now(),
@@ -318,6 +322,12 @@ export const answerStream = async ({
         stream.end();
         return;
       }
+      DebugLogger.log('qa', {
+        type: 'debug.qa.buffered_answer',
+        sessionId: session.id,
+        length: bufferedAnswer.length,
+        preview: bufferedAnswer.slice(0, 80),
+      });
       try {
         if (questionEmbedding) {
           await sessionHistoryService.persistConversation({
