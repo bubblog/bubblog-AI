@@ -7,7 +7,7 @@ import {
   storeTitleEmbedding,
 } from '../services/embedding.service';
 import { findPostById } from '../repositories/post.repository';
-import { deleteEmbeddingsByOwner } from '../repositories/ask-message-embedding.repository';
+import { deleteEmbeddingsByOwner } from '../repositories/ask-question-cache.repository';
 
 type EmbeddingJob = {
   postId: number;
