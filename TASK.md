@@ -69,11 +69,6 @@
 5. **SSE / 이벤트**
    - tone 재작성 시에도 `search_plan`, `context` 이벤트는 캐시된 값 그대로 재생하고 `answer` 이벤트에만 수정된 텍스트를 전송.
    - `session_saved` 이벤트에 `cached: true`와 `tone_rewritten: true` (추가 속성) 등을 포함해 프론트에서 구분할 수 있도록 한다.
-6. **테스트 전략**
-   - `session-history.service` 단위 테스트: tone ID가 upsert 및 조회되는지 검증.
-   - QA 서비스 통합 테스트: (1) 동일 tone 캐시 재생, (2) tone 불일치로 rewrite, (3) rewrite 실패 시 LLM 재호출 폴백.
-   - 마이그레이션 테스트: 로컬 DB에서 `speech_tone_id integer NOT NULL DEFAULT -1`가 정확히 적용되는지 확인.
-
 ## 커밋 단위 구현 계획
 1. **마이그레이션 + DB 명명 정리**
    - `docs/migrations/2025-XX-ask-question-cache-tone.sql` 추가: 테이블 리네임 → 컬럼 추가 → TRUNCATE → 인덱스 생성.
@@ -96,7 +91,3 @@
 5. **replace-tone.service.ts 신규 추가**
    - `rewriteTone` 함수 구현, 프롬프트 템플릿/에러 처리를 포함.
    - 필요 시 `qa.prompts.ts`에 tone 전용 프롬프트 자산 추가.
-
-6. **테스트/검증**
-   - `session-history` 단위 테스트, QA 통합 테스트 보강.
-   - 마이그레이션 스크립트 dry-run 결과 공유 및 README 업데이트.
