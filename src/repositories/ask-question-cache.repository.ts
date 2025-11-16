@@ -9,6 +9,7 @@ export interface MessageEmbedding {
   categoryId: number | null;
   postId: number | null;
   answerMessageId: number | null;
+  speechToneId: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -20,6 +21,7 @@ type EmbeddingRow = {
   categoryId: number | null;
   postId: number | null;
   answerMessageId: number | null;
+  speechToneId: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -32,9 +34,10 @@ const baseSelect = `
     category_id AS "categoryId",
     post_id AS "postId",
     answer_message_id AS "answerMessageId",
+    speech_tone_id AS "speechToneId",
     created_at AS "createdAt",
     updated_at AS "updatedAt"
-  FROM ask_message_embedding
+  FROM ask_question_cache
 `;
 
 const mapRow = (row: EmbeddingRow): MessageEmbedding => ({ ...row });
@@ -48,26 +51,29 @@ export const upsertEmbedding = async (
     categoryId?: number | null;
     postId?: number | null;
     answerMessageId?: number | null;
+    speechToneId?: number;
   },
   executor?: QueryExecutor
 ): Promise<MessageEmbedding> => {
   const result = await runQuery<EmbeddingRow>(
     `
-      INSERT INTO ask_message_embedding (
+      INSERT INTO ask_question_cache (
         message_id,
         owner_user_id,
         requester_user_id,
         category_id,
         post_id,
         answer_message_id,
+        speech_tone_id,
         embedding
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (message_id) DO UPDATE
       SET
         category_id = EXCLUDED.category_id,
         post_id = EXCLUDED.post_id,
         answer_message_id = EXCLUDED.answer_message_id,
+        speech_tone_id = EXCLUDED.speech_tone_id,
         embedding = EXCLUDED.embedding,
         updated_at = now()
       RETURNING
@@ -77,6 +83,7 @@ export const upsertEmbedding = async (
         category_id AS "categoryId",
         post_id AS "postId",
         answer_message_id AS "answerMessageId",
+        speech_tone_id AS "speechToneId",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
     `,
@@ -87,6 +94,7 @@ export const upsertEmbedding = async (
       params.categoryId ?? null,
       params.postId ?? null,
       params.answerMessageId ?? null,
+      params.speechToneId ?? -1,
       pgvector.toSql(params.embedding),
     ],
     executor
@@ -98,6 +106,7 @@ export const upsertEmbedding = async (
 export interface SimilarMessage {
   messageId: number;
   answerMessageId: number | null;
+  speechToneId: number;
   similarity: number;
 }
 
@@ -141,8 +150,9 @@ export const findSimilarEmbeddings = async ({
       SELECT
         message_id AS "messageId",
         answer_message_id AS "answerMessageId",
+        speech_tone_id AS "speechToneId",
         1 - (embedding <=> $1) AS similarity
-      FROM ask_message_embedding
+      FROM ask_question_cache
       WHERE ${filters.join(' AND ')}
       ORDER BY embedding <-> $1
       LIMIT $${limitIdx}
@@ -154,6 +164,6 @@ export const findSimilarEmbeddings = async ({
 };
 
 export const deleteEmbeddingsByOwner = async (ownerUserId: string): Promise<number> => {
-  const result = await runQuery('DELETE FROM ask_message_embedding WHERE owner_user_id = $1', [ownerUserId]);
+  const result = await runQuery('DELETE FROM ask_question_cache WHERE owner_user_id = $1', [ownerUserId]);
   return result.rowCount ?? 0;
 };
