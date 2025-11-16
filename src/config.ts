@@ -22,6 +22,7 @@ const configSchema = z.object({
   LLM_COST_ROUND: z.coerce.number().default(4),
   DEBUG_ALL: z.string().default('false'),
   DEBUG_CHANNELS: z.string().default(''),
+  DEBUG_EXCLUDE_TYPES: z.string().default(''),
   REDIS_URL: z.string().optional(),
   REDIS_HOST: z.string().default('127.0.0.1'),
   REDIS_PORT: z.coerce.number().default(6379),
