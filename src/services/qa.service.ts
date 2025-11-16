@@ -10,6 +10,8 @@ import { createEmbeddings } from './embedding.service';
 import * as sessionHistoryService from './session-history.service';
 import { AskSession } from '../repositories/ask-session.repository';
 import { extractAnswerText } from '../utils/sse';
+import { rewriteTone } from './replace-tone.service';
+import type { LlmOverride } from '../types/llm.types';
 
 // HTML 태그를 제거하고 길이를 제한하여 LLM 컨텍스트를 정제
 const preprocessContent = (content: string): string => {
@@ -28,12 +30,6 @@ const getSpeechTonePrompt = async (speechTone: number, userId: string): Promise<
     return `${persona.name}: ${persona.description}`;
   }
   return '간결하고 명확한 말투로 답변해'; // 기본 말투
-};
-
-type LlmOverride = {
-  provider?: 'openai' | 'gemini';
-  model?: string;
-  options?: { temperature?: number; top_p?: number; max_output_tokens?: number };
 };
 
 export interface AnswerStreamOptions {
@@ -106,11 +102,18 @@ export const answerStream = async ({
 
   let bufferedAnswer = '';
   let questionEmbedding: number[] | null = null;
+  let duplicateQuestionEmbedding: number[] | null = null;
   let searchPlanPayload: Record<string, unknown> | null = null;
   let retrievalMetaPayload: Record<string, unknown> | null = null;
   let clientDisconnected = false;
 
-  const replayCachedAnswer = async (cached: sessionHistoryService.CachedAnswerResult) => {
+  const replayCachedAnswer = async (
+    cached: sessionHistoryService.CachedAnswerResult,
+    options?: { answerOverride?: string; speechToneIdOverride?: number }
+  ) => {
+    const finalAnswer = options?.answerOverride ?? cached.answer;
+    const speechToneForPersistence =
+      typeof options?.speechToneIdOverride === 'number' ? options?.speechToneIdOverride : cached.speechToneId;
     if (cached.searchPlan) {
       stream.write(`event: search_plan\n`);
       stream.write(`data: ${JSON.stringify(cached.searchPlan)}\n\n`);
@@ -130,21 +133,24 @@ export const answerStream = async ({
       stream.write(`data: ${JSON.stringify(existFlag)}\n\n`);
     }
     stream.write(`event: answer\n`);
-    stream.write(`data: ${JSON.stringify(cached.answer)}\n\n`);
+    stream.write(`data: ${JSON.stringify(finalAnswer)}\n\n`);
 
     try {
-      if (!questionEmbedding) throw new Error('Missing question embedding for cache replay');
+      if (!questionEmbedding || !duplicateQuestionEmbedding)
+        throw new Error('Missing embeddings for cache replay');
       await sessionHistoryService.persistConversation({
         sessionId: session.id,
         requesterUserId,
         ownerUserId,
         question,
-        answer: cached.answer,
+        answer: finalAnswer,
         searchPlan: cached.searchPlan ?? undefined,
         retrievalMeta: cached.retrievalMeta ?? undefined,
         categoryId,
         postId,
         questionEmbedding,
+        duplicateQuestionEmbedding,
+        speechTone: speechToneForPersistence,
       });
       stream.emit('session_saved', sessionSavedPayload(session, true));
     } catch (error) {
@@ -168,27 +174,68 @@ export const answerStream = async ({
       userRepository.findUserBlogMetadata(ownerUserId),
       sessionHistoryService.loadRecentMessages(session.id),
     ]);
-    const embeddingVector = await createEmbeddings([question]);
+    const duplicateQuestionBlock = sessionHistoryService.buildDuplicateQuestionBlock(question, historyMessages);
+    const embeddingVector = await createEmbeddings([question, duplicateQuestionBlock]);
     questionEmbedding = embeddingVector[0];
+    duplicateQuestionEmbedding = embeddingVector[1];
 
-    const cachedAnswer =
-      questionEmbedding &&
-      (await sessionHistoryService.findCachedAnswer({
-        ownerUserId,
-        requesterUserId,
-        embedding: questionEmbedding,
-        postId: postId ?? undefined,
-        categoryId: categoryId ?? undefined,
-      }));
+    const cachedAnswerList = duplicateQuestionEmbedding
+      ? await sessionHistoryService.findCachedAnswer({
+          ownerUserId,
+          requesterUserId,
+          embedding: duplicateQuestionEmbedding,
+          postId: postId ?? undefined,
+          categoryId: categoryId ?? undefined,
+        })
+      : [];
 
-    if (cachedAnswer) {
+    const requestedSpeechTone = typeof speechTone === 'number' ? speechTone : -1;
+    const { matchingCandidate: matchingCachedAnswer, rewriteCandidate } =
+      sessionHistoryService.selectToneAwareCacheCandidate(cachedAnswerList, requestedSpeechTone);
+    DebugLogger.log('qa', {
+      type: 'debug.qa.cache_candidates',
+      requestedSpeechTone,
+      candidateCount: cachedAnswerList.length,
+      candidateTones: cachedAnswerList.map((candidate) => candidate.speechToneId),
+    });
+
+    if (matchingCachedAnswer) {
       DebugLogger.log('qa', {
         type: 'debug.qa.cache_hit',
         sessionId: session.id,
-        similarity: cachedAnswer.similarity,
+        similarity: matchingCachedAnswer.similarity,
+        speechTone: requestedSpeechTone,
       });
-      await replayCachedAnswer(cachedAnswer);
+      await replayCachedAnswer(matchingCachedAnswer);
       return;
+    }
+
+    if (rewriteCandidate) {
+      DebugLogger.log('qa', {
+        type: 'debug.qa.cache_hit_tone_mismatch',
+        sessionId: session.id,
+        similarity: rewriteCandidate.similarity,
+        requestedSpeechTone,
+        cachedSpeechTone: rewriteCandidate.speechToneId,
+      });
+      try {
+        const rewrittenAnswer = await rewriteTone(rewriteCandidate.answer, {
+          speechToneId: requestedSpeechTone,
+          speechTonePrompt,
+          llm,
+        });
+        await replayCachedAnswer(rewriteCandidate, {
+          answerOverride: rewrittenAnswer,
+          speechToneIdOverride: requestedSpeechTone,
+        });
+        return;
+      } catch (error) {
+        DebugLogger.warn('qa', {
+          type: 'debug.qa.cache_tone_rewrite_failed',
+          sessionId: session.id,
+          message: (error as Error)?.message ?? 'tone_rewrite_failed',
+        });
+      }
     }
 
     const toSimpleMessages = (
@@ -329,7 +376,7 @@ export const answerStream = async ({
         preview: bufferedAnswer.slice(0, 80),
       });
       try {
-        if (questionEmbedding) {
+        if (questionEmbedding && duplicateQuestionEmbedding) {
           await sessionHistoryService.persistConversation({
             sessionId: session.id,
             requesterUserId,
@@ -341,6 +388,8 @@ export const answerStream = async ({
             categoryId,
             postId,
             questionEmbedding,
+            duplicateQuestionEmbedding,
+            speechTone,
           });
           stream.emit('session_saved', sessionSavedPayload(session));
         } else {
