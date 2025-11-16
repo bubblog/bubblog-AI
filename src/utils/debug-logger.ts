@@ -12,6 +12,14 @@ export type DebugChannel =
 type DebugLevel = 'log' | 'info' | 'warn' | 'error';
 
 const ALL_CHANNELS: DebugChannel[] = ['plan', 'hybrid', 'qa', 'sse', 'llm', 'openai', 'server'];
+const DEFAULT_EXCLUDED_TYPES = new Set<string>([
+  'debug.qa.chunk',
+  'llm.request',
+  'llm.response',
+  'llm.error',
+  'debug.llm.start',
+  'debug.llm.end',
+]);
 
 const parseEnabledChannels = (): Set<DebugChannel> => {
   const set = new Set<DebugChannel>();
@@ -29,6 +37,47 @@ const parseEnabledChannels = (): Set<DebugChannel> => {
 
 const enabledAll = (config.DEBUG_ALL || '').toString().toLowerCase() === 'true';
 const enabledChannels = parseEnabledChannels();
+const parseExcludedTypes = (): {
+  global: Set<string>;
+  byChannel: Map<DebugChannel, Set<string>>;
+} => {
+  const global = new Set<string>(DEFAULT_EXCLUDED_TYPES);
+  const byChannel = new Map<DebugChannel, Set<string>>();
+  const raw = (config.DEBUG_EXCLUDE_TYPES || '').toString();
+  if (!raw) return { global, byChannel };
+  for (const token of raw.split(',')) {
+    const item = token.trim();
+    if (!item) continue;
+    const [rawChannel, rawType] = item.includes(':') ? item.split(':', 2) : [null, item];
+    const type = (rawType ?? '').trim();
+    if (!type) continue;
+    if (!rawChannel) {
+      global.add(type);
+      continue;
+    }
+    const channelKey = ALL_CHANNELS.find((ch) => ch === rawChannel.trim());
+    if (!channelKey) {
+      global.add(type);
+      continue;
+    }
+    const set = byChannel.get(channelKey) ?? new Set<string>();
+    set.add(type);
+    byChannel.set(channelKey, set);
+  }
+  return { global, byChannel };
+};
+
+const excludedTypes = parseExcludedTypes();
+
+const shouldSkipPayload = (channel: DebugChannel, payload: unknown): boolean => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const type = (payload as Record<string, unknown>).type;
+  if (typeof type !== 'string' || !type) return false;
+  if (excludedTypes.global.has('*') || excludedTypes.global.has(type)) return true;
+  const channelSet = excludedTypes.byChannel.get(channel);
+  if (!channelSet) return false;
+  return channelSet.has('*') || channelSet.has(type);
+};
 
 const pickWriter = (level: DebugLevel) => {
   switch (level) {
@@ -95,6 +144,7 @@ export const DebugLogger = {
   },
   write(channel: DebugChannel, payload: unknown, level: DebugLevel = 'log'): void {
     if (!this.isEnabled(channel)) return;
+    if (shouldSkipPayload(channel, payload)) return;
     const writer = pickWriter(level);
     writer(formatPayload(channel, payload));
   },
