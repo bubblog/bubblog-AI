@@ -419,8 +419,8 @@ export const findSimilarChunksGlobalANN = async (params: {
   values.push(topK);
 
   let orderBy = 'similarity_score DESC';
-  if (params.sort === 'created_at_desc') orderBy = 'similarity_score DESC, bp.created_at DESC';
-  if (params.sort === 'created_at_asc') orderBy = 'similarity_score DESC, bp.created_at ASC';
+  if (params.sort === 'created_at_desc') orderBy = 'similarity_score DESC, created_at DESC';
+  if (params.sort === 'created_at_asc') orderBy = 'similarity_score DESC, created_at ASC';
 
   const sql = `
     WITH nn AS (
