@@ -165,7 +165,6 @@ export const answerStreamV2 = async ({
     const cachedAnswerList = duplicateQuestionEmbedding
       ? await sessionHistoryService.findCachedAnswer({
           ownerUserId,
-          requesterUserId,
           embedding: duplicateQuestionEmbedding,
           postId: postId ?? undefined,
           categoryId: categoryId ?? undefined,

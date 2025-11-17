@@ -112,7 +112,6 @@ export interface SimilarMessage {
 
 export interface SimilarSearchParams {
   ownerUserId: string;
-  requesterUserId: string;
   embedding: number[];
   postId?: number | null;
   categoryId?: number | null;
@@ -121,14 +120,13 @@ export interface SimilarSearchParams {
 
 export const findSimilarEmbeddings = async ({
   ownerUserId,
-  requesterUserId,
   embedding,
   postId,
   categoryId,
   limit = 3,
 }: SimilarSearchParams): Promise<SimilarMessage[]> => {
-  const filters = ['owner_user_id = $2', 'requester_user_id = $3'];
-  const values: unknown[] = [pgvector.toSql(embedding), ownerUserId, requesterUserId];
+  const filters = ['owner_user_id = $2'];
+  const values: unknown[] = [pgvector.toSql(embedding), ownerUserId];
 
   if (postId != null) {
     values.push(postId);

@@ -21,7 +21,7 @@
 - `persistConversation`(`session-history.service.ts:68`)이 answer tone과 중복 질문 벡터를 함께 `ask_question_cache`에 upsert한다.
 
 ### 3. tone-aware 캐시 조회
-- `findCachedAnswer`(`session-history.service.ts:146`)가 owner, requester, post, category 조건에 맞는 후보를 tone ID와 함께 돌려준다.
+- `findCachedAnswer`(`session-history.service.ts:146`)가 owner, post, category 조건에 맞는 후보를 tone ID와 함께 돌려준다. `requester_user_id` 필터를 없애 동일 글의 관리자는 여러 상담 채널/요청자 간에도 캐시를 재활용할 수 있다.
 - `selectToneAwareCacheCandidate`(`session-history.service.ts:36`)가 요청 tone과 동일한 후보를 고르고, 없으면 top-1 후보를 rewrite 대상으로 지정한다.
 - `qa.service.ts:192`, `qa.v2.service.ts:175`에서 tone이 맞는 캐시는 그대로 재생하고, tone이 다르면 rewrite 경로로 분기한다.
 
