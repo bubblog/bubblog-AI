@@ -136,7 +136,6 @@ export interface CachedAnswerResult {
 
 export interface FindCachedAnswerParams {
   ownerUserId: string;
-  requesterUserId: string;
   embedding: number[];
   postId?: number;
   categoryId?: number;
@@ -145,7 +144,6 @@ export interface FindCachedAnswerParams {
 
 export const findCachedAnswer = async ({
   ownerUserId,
-  requesterUserId,
   embedding,
   postId,
   categoryId,
@@ -153,7 +151,6 @@ export const findCachedAnswer = async ({
 }: FindCachedAnswerParams): Promise<CachedAnswerResult[]> => {
   const candidates = await questionCacheRepository.findSimilarEmbeddings({
     ownerUserId,
-    requesterUserId,
     embedding,
     postId: postId ?? null,
     categoryId: categoryId ?? null,
