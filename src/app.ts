@@ -16,6 +16,7 @@ const corsOptions: cors.CorsOptions = {
 };
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // 모든 경로에 대한 프리플라이트 요청 처리
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
